@@ -27,3 +27,8 @@ the implementation plan and rationale.
 
 ## Deliberately deferred (per README) — leave alone unless requirements change
 - Multi-modal fusion, auth, Docker, model registry, CI
+
+Future:
+1. Score integration accross modalities
+2. more explainability for the image
+3. Explainability for the EEG
