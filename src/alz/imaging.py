@@ -162,9 +162,13 @@ def train_mri(
         avg_loss = total_loss / n_batches if n_batches else 0.0
 
         model.eval()
+        train_metrics = _metrics(*_predict_probs(model, train_loader, device), classes)
         val_metrics = _metrics(*_predict_probs(model, val_loader, device), classes)
         print(
             f"Epoch {epoch + 1}/{epochs} - loss: {avg_loss:.4f} - "
+            f"train_acc: {train_metrics['accuracy']:.3f} - "
+            f"train_auroc: {_fmt_metric(train_metrics['auroc'])} - "
+            f"train_auprc: {_fmt_metric(train_metrics['auprc'])} - "
             f"val_acc: {val_metrics['accuracy']:.3f} - "
             f"val_auroc: {_fmt_metric(val_metrics['auroc'])} - "
             f"val_auprc: {_fmt_metric(val_metrics['auprc'])}"
@@ -272,11 +276,11 @@ def _load_mri_model(model_path: str, device: str):
     return model, checkpoint["classes"]
 
 
-def predict_mri(path: str, model_path: str = DEFAULT_MODEL_PATH) -> dict:
-    """Same return shape as model.predict(): {'score': float, 'label': str}.
+def predict_mri_probs(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
+    """Full severity distribution: {'probs': {class_label: float, ...}, 'label': str, 'score': float}.
 
-    'label' is the predicted severity class (Non Demented / Very mild / Mild / Moderate
-    Dementia); 'score' is the model's confidence in that class.
+    'path' may be a filesystem path or any file-like object PIL.Image.open accepts
+    (e.g. a Streamlit UploadedFile).
     """
     import torch
     from PIL import Image
@@ -290,4 +294,18 @@ def predict_mri(path: str, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     with torch.no_grad():
         probs = torch.softmax(model(tensor), dim=1)[0]
     label_idx = int(probs.argmax())
-    return {"score": float(probs[label_idx]), "label": classes[label_idx]}
+    return {
+        "probs": {c: float(p) for c, p in zip(classes, probs.tolist())},
+        "label": classes[label_idx],
+        "score": float(probs[label_idx]),
+    }
+
+
+def predict_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
+    """Same return shape as model.predict(): {'score': float, 'label': str}.
+
+    'label' is the predicted severity class (Non Demented / Very mild / Mild / Moderate
+    Dementia); 'score' is the model's confidence in that class.
+    """
+    result = predict_mri_probs(path, model_path)
+    return {"score": result["score"], "label": result["label"]}

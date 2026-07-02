@@ -17,7 +17,7 @@ pytest.importorskip("matplotlib")
 
 from PIL import Image
 
-from alz.imaging import evaluate_mri, predict_mri, train_mri
+from alz.imaging import evaluate_mri, predict_mri, predict_mri_probs, train_mri
 
 CLASSES = ["Non Demented", "Mild Dementia"]
 
@@ -48,6 +48,12 @@ def test_train_predict_roundtrip(tmp_path):
     result = predict_mri(paths[0], model_path=model_path)
     assert result["label"] in CLASSES
     assert 0.0 <= result["score"] <= 1.0
+
+    probs_result = predict_mri_probs(paths[0], model_path=model_path)
+    assert set(probs_result["probs"]) == set(CLASSES)
+    assert probs_result["label"] == max(probs_result["probs"], key=probs_result["probs"].get)
+    assert probs_result["score"] == pytest.approx(probs_result["probs"][probs_result["label"]])
+    assert sum(probs_result["probs"].values()) == pytest.approx(1.0, abs=1e-5)
 
 
 def test_evaluate_mri(tmp_path):
