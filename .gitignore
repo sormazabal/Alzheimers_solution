@@ -7,3 +7,4 @@ models/*.pt
 .pytest_cache/
 .env
 data/imagesoasis
+data\ds004504
