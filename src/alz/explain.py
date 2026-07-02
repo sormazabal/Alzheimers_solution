@@ -2,7 +2,7 @@
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
-from alz.data import FEATURE_COLUMNS
+from alz.data import FEATURE_COLUMNS, load_population
 
 
 def top_drivers(pipeline: Pipeline, record_df: pd.DataFrame, n: int = 3) -> list[dict]:
@@ -13,7 +13,13 @@ def top_drivers(pipeline: Pipeline, record_df: pd.DataFrame, n: int = 3) -> list
     contributions = scaled * clf.coef_[0]
 
     ranked = sorted(zip(FEATURE_COLUMNS, contributions), key=lambda kv: abs(kv[1]), reverse=True)
+    population = load_population()
     return [
-        {"feature": feature, "direction": "raises risk" if value > 0 else "lowers risk"}
+        {
+            "feature": feature,
+            "direction": "raises risk" if value > 0 else "lowers risk",
+            "value": record_df[feature].iloc[0],
+            "percentile": float((population[feature] < record_df[feature].iloc[0]).mean() * 100),
+        }
         for feature, value in ranked[:n]
     ]
