@@ -1,0 +1,3 @@
+[submodule "vendor/alzheimers-disease-prediction"]
+	path = vendor/alzheimers-disease-prediction
+	url = https://github.com/HimanS-sys/alzheimers-disease-prediction.git
