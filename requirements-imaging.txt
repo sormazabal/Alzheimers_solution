@@ -1,9 +1,9 @@
 # Phase-2 only (MRI confirmation). Not needed for the tabular demo or requirements.txt.
+# (groq/python-dotenv moved to requirements.txt -- the LLM summary/chat features on the
+# Overview tab need them too, not just MRI explanations.)
 torch
 torchvision
 pillow
 kagglehub
 scikit-learn
 matplotlib
-groq
-python-dotenv

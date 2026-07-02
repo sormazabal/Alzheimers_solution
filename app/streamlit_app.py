@@ -18,7 +18,7 @@ import streamlit as st
 
 from alz import predict
 from alz.data import FEATURE_META, load_population
-from alz.explain import explain_mri
+from alz.explain import chat_about_case, explain_mri, synthesize_summary
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "TAO_logo.png"), size="large")
@@ -179,6 +179,14 @@ with tab_overview:
 
     st.divider()
     st.subheader("Clinical conclusions")
+    mri_result = selected["result"] if selected else None
+    if st.button(":material/auto_awesome: Generate AI summary"):
+        with st.spinner("Synthesizing..."):
+            summary = synthesize_summary(patient, result, mri_result, eeg)
+        if summary:
+            st.session_state.notes = summary
+        else:
+            st.warning("LLM summary unavailable (check LLM provider configuration).")
     st.session_state.notes = st.text_area(
         "Synthesized notes",
         st.session_state.notes,
@@ -186,6 +194,20 @@ with tab_overview:
         placeholder="Summarize the combined AI assessments and clinical impression here...",
         label_visibility="collapsed",
     )
+
+    st.subheader("Ask about this case")
+    st.session_state.setdefault("chat_history", [])
+    for msg in st.session_state.chat_history:
+        with st.chat_message(msg["role"]):
+            st.write(msg["content"])
+    if question := st.chat_input("Ask a question about this patient's case..."):
+        st.session_state.chat_history.append({"role": "user", "content": question})
+        with st.spinner("Thinking..."):
+            reply = chat_about_case(st.session_state.chat_history, patient, result, mri_result, eeg)
+        st.session_state.chat_history.append(
+            {"role": "assistant", "content": reply or "Sorry, I couldn't answer that (check LLM provider configuration)."}
+        )
+        st.rerun()
 
 # ---------------------------------------------------------------------------
 # Tab 2: Clinical risk
