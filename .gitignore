@@ -5,5 +5,5 @@ venv/
 models/*.joblib
 models/*.pt
 .pytest_cache/
-
+.env
 data/imagesoasis
