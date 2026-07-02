@@ -9,11 +9,14 @@ the implementation plan and rationale.
 - [x] `data/download_oasis.py` documented in [data/README.md](data/README.md) as a
       separate phase-2 imaging fetch — it does not replace the tabular sample workflow
 
-## Phase 2 (imaging) — currently stubbed
-- [x] Confirmed `requirements-imaging.txt` exists (now includes `kagglehub`, used by
-      `download_oasis.py`)
-- [ ] Implement MRI/CNN training in [src/alz/imaging.py](src/alz/imaging.py) — needs GPU +
-      a data-use agreement first (blocked, not a pure code task)
+## Phase 2 (imaging) — implemented
+- [x] Confirmed `requirements-imaging.txt` exists (now `torch`, `torchvision`, `pillow`,
+      `kagglehub`)
+- [x] Implement MRI severity classifier in
+      [src/alz/imaging.py](src/alz/imaging.py) — the "needs GPU + data-use agreement"
+      block was stale: the Kaggle `imagesoasis` mirror is 2D JPEG slices, publicly
+      downloadable via `kagglehub` (no DUA), and a transfer-learned ResNet18 head trains
+      fine on CPU (uses GPU automatically when available). See `train_mri.py`.
 
 ## Housekeeping
 - [x] `.gitignore` was already committed and clean (only ignores `data/imagesoasis` and

@@ -10,10 +10,13 @@ code changes needed.
 
 ## Phase-2 imaging data
 
-`download_oasis.py` in this directory fetches the OASIS **imaging** dataset from Kaggle for
-the phase-2 MRI/CNN pipeline ([src/alz/imaging.py](../src/alz/imaging.py), currently a stub).
-It is unrelated to the tabular workflow above -- running it does not affect
-`oasis_longitudinal.csv` or `train.py`.
+`download_oasis.py` in this directory fetches the OASIS **imaging** dataset from Kaggle
+(`ninadaithal/imagesoasis`) for the phase-2 MRI severity classifier
+([src/alz/imaging.py](../src/alz/imaging.py)). It lands at
+`data/imagesoasis/versions/1/Data/<class folders>` (kagglehub's cache layout) and is
+unrelated to the tabular workflow above -- running it does not affect
+`oasis_longitudinal.csv` or `train.py`. Train with `python train_mri.py` (see
+[README.md](../README.md)).
 
 ## Expected columns
 
