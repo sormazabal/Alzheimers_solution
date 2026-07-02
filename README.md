@@ -16,10 +16,11 @@ all behind one integration seam any system can call.
 ## Run it
 
 ```
-pip install -r requirements.txt
-python train.py                          # trains models/model.joblib on data/oasis_longitudinal.csv
-python -m pytest tests/test_smoke.py     # train -> predict roundtrip check
-streamlit run app/streamlit_app.py       # interactive demo
+uv venv
+uv pip install -r requirements.txt
+uv run python train.py                          # trains models/model.joblib on data/oasis_longitudinal.csv
+uv run pytest tests/test_smoke.py               # train -> predict roundtrip check
+uv run streamlit run app/streamlit_app.py       # interactive demo
 ```
 
 ## Integration seam
