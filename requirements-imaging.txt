@@ -3,3 +3,5 @@ torch
 torchvision
 pillow
 kagglehub
+scikit-learn
+matplotlib

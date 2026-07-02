@@ -45,6 +45,76 @@ def build_mri_model(num_classes: int):
     return model
 
 
+def _load_splits(data_dir: str, limit: int | None, seed: int = 42):
+    """ImageFolder dataset -> 70/15/15 train/val/test split, reused by train_mri and evaluate_mri
+    so a given (data_dir, limit) always yields the same test set a model was trained against."""
+    import torch
+    from torch.utils.data import Subset, random_split
+    from torchvision.datasets import ImageFolder
+
+    dataset = ImageFolder(data_dir, transform=_transform())
+    if limit is not None:
+        dataset = Subset(dataset, range(min(limit, len(dataset))))
+    classes = dataset.dataset.classes if isinstance(dataset, Subset) else dataset.classes
+
+    n = len(dataset)
+    train_size = int(0.7 * n)
+    val_size = int(0.15 * n)
+    test_size = n - train_size - val_size
+    train_set, val_set, test_set = random_split(
+        dataset, [train_size, val_size, test_size],
+        generator=torch.Generator().manual_seed(seed),
+    )
+    return train_set, val_set, test_set, classes
+
+
+def _predict_probs(model, loader, device):
+    """Eval-mode inference over a loader -> (y_true, y_prob) numpy arrays of softmax probabilities."""
+    import numpy as np
+    import torch
+
+    y_true, y_prob = [], []
+    with torch.no_grad():
+        for images, labels in loader:
+            images = images.to(device)
+            probs = torch.softmax(model(images), dim=1)
+            y_true.append(labels.numpy())
+            y_prob.append(probs.cpu().numpy())
+    if not y_true:
+        return np.empty(0), np.empty((0, 0))
+    return np.concatenate(y_true), np.concatenate(y_prob)
+
+
+def _metrics(y_true, y_prob, classes) -> dict:
+    """{'accuracy', 'auroc', 'auprc'}; auroc/auprc are None when not computable (e.g. a split
+    with only one class present, which happens with tiny/synthetic datasets)."""
+    from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
+
+    if len(y_true) == 0:
+        return {"accuracy": 0.0, "auroc": None, "auprc": None}
+
+    accuracy = accuracy_score(y_true, y_prob.argmax(1))
+    try:
+        if len(classes) == 2:
+            score = y_prob[:, 1]
+            auroc = roc_auc_score(y_true, score)
+            auprc = average_precision_score(y_true, score)
+        else:
+            from sklearn.preprocessing import label_binarize
+
+            auroc = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
+            y_bin = label_binarize(y_true, classes=range(len(classes)))
+            auprc = average_precision_score(y_bin, y_prob, average="macro")
+    except ValueError:
+        auroc = auprc = None
+
+    return {"accuracy": accuracy, "auroc": auroc, "auprc": auprc}
+
+
+def _fmt_metric(value) -> str:
+    return f"{value:.3f}" if value is not None else "n/a"
+
+
 def train_mri(
     data_dir: str,
     out_path: str = DEFAULT_MODEL_PATH,
@@ -52,33 +122,25 @@ def train_mri(
     limit: int | None = None,
     device: str | None = None,
 ) -> float:
-    """Train on an ImageFolder-structured directory of class folders. Returns held-out accuracy."""
+    """Train on an ImageFolder-structured directory of class folders. Returns held-out test accuracy."""
     import os
 
     import torch
-    from torch.utils.data import DataLoader, Subset, random_split
-    from torchvision.datasets import ImageFolder
+    from torch.utils.data import DataLoader
 
     device = _device(device)
-    dataset = ImageFolder(data_dir, transform=_transform())
-    if limit is not None:
-        dataset = Subset(dataset, range(min(limit, len(dataset))))
-    classes = dataset.dataset.classes if isinstance(dataset, Subset) else dataset.classes
-
-    train_size = int(0.75 * len(dataset))
-    train_set, test_set = random_split(
-        dataset, [train_size, len(dataset) - train_size],
-        generator=torch.Generator().manual_seed(42),
-    )
+    train_set, val_set, test_set, classes = _load_splits(data_dir, limit)
     train_loader = DataLoader(train_set, batch_size=32, shuffle=True)
+    val_loader = DataLoader(val_set, batch_size=32)
     test_loader = DataLoader(test_set, batch_size=32)
 
     # Inverse-frequency class weights for the imbalanced OASIS severity classes.
     # ponytail: inverse-freq class weights; add sampler/augmentation if minority recall stalls.
-    if isinstance(dataset, Subset):
-        targets = [dataset.dataset.targets[i] for i in dataset.indices]
+    full_dataset = train_set.dataset
+    if hasattr(full_dataset, "dataset"):
+        targets = [full_dataset.dataset.targets[i] for i in full_dataset.indices]
     else:
-        targets = dataset.targets
+        targets = full_dataset.targets
     counts = torch.bincount(torch.tensor(targets), minlength=len(classes)).float()
     weights = (1.0 / counts.clamp(min=1)).to(device)
 
@@ -86,26 +148,116 @@ def train_mri(
     criterion = torch.nn.CrossEntropyLoss(weight=weights)
     optimizer = torch.optim.Adam(model.fc.parameters(), lr=1e-3)
 
-    model.train()
-    for _ in range(epochs):
+    for epoch in range(epochs):
+        model.train()
+        total_loss, n_batches = 0.0, 0
         for images, labels in train_loader:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             loss = criterion(model(images), labels)
             loss.backward()
             optimizer.step()
+            total_loss += loss.item()
+            n_batches += 1
+        avg_loss = total_loss / n_batches if n_batches else 0.0
+
+        model.eval()
+        val_metrics = _metrics(*_predict_probs(model, val_loader, device), classes)
+        print(
+            f"Epoch {epoch + 1}/{epochs} - loss: {avg_loss:.4f} - "
+            f"val_acc: {val_metrics['accuracy']:.3f} - "
+            f"val_auroc: {_fmt_metric(val_metrics['auroc'])} - "
+            f"val_auprc: {_fmt_metric(val_metrics['auprc'])}"
+        )
 
     model.eval()
-    correct = 0
-    with torch.no_grad():
-        for images, labels in test_loader:
-            images, labels = images.to(device), labels.to(device)
-            correct += (model(images).argmax(1) == labels).sum().item()
-    accuracy = correct / len(test_set) if len(test_set) else 0.0
+    test_metrics = _metrics(*_predict_probs(model, test_loader, device), classes)
+    print(
+        f"Test - acc: {test_metrics['accuracy']:.3f} - "
+        f"auroc: {_fmt_metric(test_metrics['auroc'])} - "
+        f"auprc: {_fmt_metric(test_metrics['auprc'])}"
+    )
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "classes": classes}, out_path)
-    return accuracy
+    return test_metrics["accuracy"]
+
+
+def evaluate_mri(
+    data_dir: str,
+    model_path: str = DEFAULT_MODEL_PATH,
+    device: str | None = None,
+    limit: int | None = None,
+    plot_dir: str | None = None,
+) -> dict:
+    """Report accuracy/AUROC/AUPRC on the train/val/test splits of a trained model, and
+    optionally save ROC/PR curve plots (from the test split) to plot_dir."""
+    from torch.utils.data import DataLoader
+
+    device = _device(device)
+    train_set, val_set, test_set, classes = _load_splits(data_dir, limit)
+    model, _ = _load_mri_model(model_path, device)
+
+    splits = {"train": train_set, "val": val_set, "test": test_set}
+    results = {}
+    predictions = {}
+    for name, split in splits.items():
+        loader = DataLoader(split, batch_size=32)
+        y_true, y_prob = _predict_probs(model, loader, device)
+        predictions[name] = (y_true, y_prob)
+        results[name] = _metrics(y_true, y_prob, classes)
+
+    if plot_dir is not None:
+        _plot_curves(*predictions["test"], classes, plot_dir)
+
+    return results
+
+
+def _plot_curves(y_true, y_prob, classes, plot_dir: str) -> None:
+    import os
+
+    import numpy as np
+    from sklearn.metrics import precision_recall_curve, roc_curve
+
+    os.makedirs(plot_dir, exist_ok=True)
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    if len(y_true) == 0:
+        return
+
+    class_indices = range(1) if len(classes) == 2 else range(len(classes))
+
+    fig, ax = plt.subplots()
+    for i in class_indices:
+        y_bin = (np.asarray(y_true) == 1).astype(int) if len(classes) == 2 else (np.asarray(y_true) == i).astype(int)
+        y_score = y_prob[:, 1] if len(classes) == 2 else y_prob[:, i]
+        fpr, tpr, _ = roc_curve(y_bin, y_score)
+        label = classes[1] if len(classes) == 2 else classes[i]
+        ax.plot(fpr, tpr, label=label)
+    ax.plot([0, 1], [0, 1], "k--", linewidth=0.5)
+    ax.set_xlabel("False positive rate")
+    ax.set_ylabel("True positive rate")
+    ax.set_title("ROC curve (test set)")
+    ax.legend()
+    fig.savefig(os.path.join(plot_dir, "roc_curve.png"))
+    plt.close(fig)
+
+    fig, ax = plt.subplots()
+    for i in class_indices:
+        y_bin = (np.asarray(y_true) == 1).astype(int) if len(classes) == 2 else (np.asarray(y_true) == i).astype(int)
+        y_score = y_prob[:, 1] if len(classes) == 2 else y_prob[:, i]
+        precision, recall, _ = precision_recall_curve(y_bin, y_score)
+        label = classes[1] if len(classes) == 2 else classes[i]
+        ax.plot(recall, precision, label=label)
+    ax.set_xlabel("Recall")
+    ax.set_ylabel("Precision")
+    ax.set_title("Precision-recall curve (test set)")
+    ax.legend()
+    fig.savefig(os.path.join(plot_dir, "pr_curve.png"))
+    plt.close(fig)
 
 
 @lru_cache(maxsize=None)  # ponytail: caches per model path; drop if paths change at runtime
