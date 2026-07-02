@@ -17,7 +17,7 @@ pytest.importorskip("matplotlib")
 
 from PIL import Image
 
-from alz.imaging import evaluate_mri, predict_mri, predict_mri_probs, train_mri
+from alz.imaging import evaluate_mri, gradcam_mri, predict_mri, predict_mri_probs, train_mri
 
 CLASSES = ["Non Demented", "Mild Dementia"]
 
@@ -56,6 +56,21 @@ def test_train_predict_roundtrip(tmp_path):
     assert sum(probs_result["probs"].values()) == pytest.approx(1.0, abs=1e-5)
 
 
+def test_gradcam_mri(tmp_path):
+    data_dir = str(tmp_path / "data")
+    model_path = str(tmp_path / "mri_model.pt")
+    paths = _make_synthetic_dataset(data_dir)
+    train_mri(data_dir, out_path=model_path, epochs=1)
+
+    expected = predict_mri_probs(paths[0], model_path=model_path)
+    cam = gradcam_mri(paths[0], model_path=model_path)
+
+    assert cam["overlay"].size == (224, 224)
+    assert cam["overlay"].mode == "RGB"
+    assert cam["label"] == expected["label"]
+    assert cam["score"] == pytest.approx(expected["score"])
+
+
 def test_evaluate_mri(tmp_path):
     data_dir = str(tmp_path / "data")
     model_path = str(tmp_path / "mri_model.pt")
@@ -77,6 +92,8 @@ if __name__ == "__main__":
 
     with tempfile.TemporaryDirectory() as tmp:
         test_train_predict_roundtrip(__import__("pathlib").Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_gradcam_mri(__import__("pathlib").Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_evaluate_mri(__import__("pathlib").Path(tmp))
     print("ok")

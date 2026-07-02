@@ -25,6 +25,8 @@ def test_train_predict_roundtrip():
     drivers = top_drivers(pipeline, X.iloc[[0]])
     assert len(drivers) == 3
     assert all(d["direction"] in ("raises risk", "lowers risk") for d in drivers)
+    assert all(0.0 <= d["percentile"] <= 100.0 for d in drivers)
+    assert all(isinstance(d["value"], float) for d in drivers)
 
 
 if __name__ == "__main__":

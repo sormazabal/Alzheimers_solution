@@ -5,3 +5,5 @@ pillow
 kagglehub
 scikit-learn
 matplotlib
+groq
+python-dotenv

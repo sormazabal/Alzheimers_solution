@@ -309,3 +309,69 @@ def predict_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     """
     result = predict_mri_probs(path, model_path)
     return {"score": result["score"], "label": result["label"]}
+
+
+def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
+    """Grad-CAM overlay showing which regions of the scan drove the prediction.
+
+    Returns {'overlay': PIL.Image (224x224 RGB), 'label': str, 'score': float}.
+
+    ponytail: plain hook-based Grad-CAM on model.layer4[-1] (the stock ResNet18's last conv
+    block) -- swap for captum/grad-cam only if a fancier variant (Grad-CAM++, etc.) is needed.
+    """
+    import numpy as np
+    import torch
+    import torch.nn.functional as F
+    from PIL import Image
+    from torchvision import transforms
+
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.cm as cm
+
+    device = _device()
+    model, classes = _load_mri_model(model_path, device)
+
+    image = Image.open(path).convert("RGB")
+    display_image = transforms.Compose([transforms.Resize(224), transforms.CenterCrop(224)])(image)
+    # Backbone params are frozen (requires_grad=False), so autograd won't track activations
+    # through them unless the input itself requires grad.
+    tensor = _transform()(image).unsqueeze(0).to(device).requires_grad_(True)
+
+    activations, gradients = {}, {}
+    target_layer = model.layer4[-1]
+
+    def _forward_hook(_module, _input, output):
+        activations["value"] = output
+
+    def _backward_hook(_module, _grad_input, grad_output):
+        gradients["value"] = grad_output[0]
+
+    handle_f = target_layer.register_forward_hook(_forward_hook)
+    handle_b = target_layer.register_full_backward_hook(_backward_hook)
+    try:
+        model.zero_grad()
+        logits = model(tensor)
+        probs = torch.softmax(logits, dim=1)[0]
+        label_idx = int(probs.argmax())
+        logits[0, label_idx].backward()
+
+        weights = gradients["value"].mean(dim=(2, 3), keepdim=True)
+        cam = F.relu((weights * activations["value"]).sum(dim=1, keepdim=True))
+        cam = F.interpolate(cam, size=(224, 224), mode="bilinear", align_corners=False)[0, 0]
+        cam = cam.detach().cpu().numpy()
+        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
+        score = float(probs[label_idx].detach())
+    finally:
+        handle_f.remove()
+        handle_b.remove()
+
+    heatmap = (cm.get_cmap("jet")(cam)[:, :, :3] * 255).astype(np.uint8)
+    base = np.asarray(display_image).astype(np.float32)
+    blended = (0.5 * heatmap.astype(np.float32) + 0.5 * base).clip(0, 255).astype(np.uint8)
+
+    return {
+        "overlay": Image.fromarray(blended),
+        "label": classes[label_idx],
+        "score": score,
+    }

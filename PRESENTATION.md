@@ -1,7 +1,7 @@
 # Alzheimer's Early-Risk MVP
 
 **Subtitle:** A modular Alzheimer's-risk pipeline that scores patients from routine clinical data today and scales to MRI confirmation later — all behind one integration seam any system can call.
-**Presenter:** Sofia Ormazabal Arriagada *(from git author; no maintainer named in repo)*
+**Presenter:** Zow ORmazabal
 
 ## Slide 2: Outline
 - Project overview and client value
