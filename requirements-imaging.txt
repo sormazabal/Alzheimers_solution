@@ -1,0 +1,4 @@
+# Phase-2 only (MRI confirmation). Not needed for the tabular demo or requirements.txt.
+torch
+monai
+torchio
