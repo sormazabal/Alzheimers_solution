@@ -4,3 +4,5 @@ __pycache__/
 venv/
 models/*.joblib
 .pytest_cache/
+
+data/imagesoasis
