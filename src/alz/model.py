@@ -3,6 +3,8 @@
 Logistic regression is used over the vendor notebook's RandomForest because its coefficients
 give a direct, honest explanation for explain.py (see model choice note in the plan).
 """
+from functools import lru_cache
+
 import joblib
 import pandas as pd
 from sklearn.impute import SimpleImputer
@@ -39,6 +41,7 @@ def save_model(pipeline: Pipeline, path: str) -> None:
     joblib.dump(pipeline, path)
 
 
+@lru_cache(maxsize=None)  # ponytail: caches per model path; drop if paths change at runtime
 def load_model(path: str) -> Pipeline:
     return joblib.load(path)
 

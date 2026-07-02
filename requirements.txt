@@ -3,3 +3,6 @@ scikit-learn
 pandas
 joblib
 pytest
+httpx
+fastapi
+uvicorn[standard]

@@ -8,6 +8,13 @@ To use real data, download the OASIS-2 longitudinal CSV from
 [oasis-brains.org](https://www.oasis-brains.org/) and replace this file — same column names, no
 code changes needed.
 
+## Phase-2 imaging data
+
+`download_oasis.py` in this directory fetches the OASIS **imaging** dataset from Kaggle for
+the phase-2 MRI/CNN pipeline ([src/alz/imaging.py](../src/alz/imaging.py), currently a stub).
+It is unrelated to the tabular workflow above -- running it does not affect
+`oasis_longitudinal.csv` or `train.py`.
+
 ## Expected columns
 
 `Subject ID, MRI ID, Group, Visit, MR Delay, M/F, Hand, Age, EDUC, SES, MMSE, CDR, eTIV, nWBV, ASF`
