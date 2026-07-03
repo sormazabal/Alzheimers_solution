@@ -58,11 +58,28 @@ def band_for_score(score: float) -> tuple[str, str]:
 
 MRI_LEVELS = {"Non Demented": "normal", "Mild Dementia": "mild", "Moderate Dementia": "high"}
 
+def next_steps(level: str, pending: list[str]) -> str:
+    """Recommendation text for a severity level, naming only assessments not yet run."""
+    if not pending:
+        return {
+            "normal": "All assessments complete; no further workup indicated. Continue routine annual screening.",
+            "mild": "All assessments complete. Recommend a follow-up visit in 6 months.",
+            "high": "All assessments complete. Recommend referral to a memory/neurology specialist.",
+        }[level]
+    todo = "/".join(pending)
+    if level == "normal":
+        return f"Recommend completing the remaining assessment(s) ({todo}) to confirm this finding."
+    if level == "mild":
+        return f"Recommend completing the remaining assessment(s) ({todo}) and a follow-up visit in 6 months."
+    return f"Recommend completing the remaining assessment(s) ({todo}) promptly and referral to a memory/neurology specialist."
+
 
 def demo():  # ponytail-required self-check for the only nontrivial pure logic here
     assert band_for_score(0.1)[1] == "normal"
     assert band_for_score(0.5)[1] == "mild"
     assert band_for_score(0.9)[1] == "high"
+    assert "MRI" in next_steps("mild", ["MRI", "EEG"])
+    assert "remaining" not in next_steps("high", [])
 
 
 demo()
@@ -136,12 +153,12 @@ with st.sidebar:
     else:
         st.caption("EEG: not yet assessed")
 
-tab_overview, tab_clinical, tab_mri, tab_eeg = st.tabs(
-    ["Overview", "Clinical risk", "MRI records", "EEG records"]
+tab_clinical, tab_mri, tab_eeg, tab_overview = st.tabs(
+    ["Clinical risk", "MRI records", "EEG records", "Overview"]
 )
 
 # ---------------------------------------------------------------------------
-# Tab 1: Overview
+# Tab 4: Overview
 # ---------------------------------------------------------------------------
 with tab_overview:
     st.subheader("Assessment summary")
@@ -330,6 +347,11 @@ with tab_clinical:
             with top[1]:
                 st.write("")
                 st.markdown(chip(severity_label, severity_level), unsafe_allow_html=True)
+            pending = [
+                name for name, done in [("MRI", st.session_state.mri_selected), ("EEG", st.session_state.eeg_result)]
+                if not done
+            ]
+            st.info(f"**Recommended next steps:** {next_steps(severity_level, pending)}")
             if record["Visit"] > 1 and st.session_state.mmse_history:
                 prior = st.session_state.mmse_history[-1]
                 with top[2]:
@@ -416,6 +438,11 @@ with tab_mri:
                 st.session_state.mri_selected = scan
 
                 st.metric("Predicted severity", result["label"], f"{result['score']:.0%} confidence")
+                pending = [
+                    name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
+                    if not done
+                ]
+                st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'mild'), pending)}")
 
                 probs = result["probs"]
                 bar = go.Figure(go.Bar(

@@ -144,7 +144,10 @@ def _findings_prompt(result: dict, attention: str | None) -> str:
         "in the scan -- lateral ventricle size, medial-temporal/hippocampal atrophy, cortical "
         "sulcal widening or global atrophy, and hemispheric symmetry -- and connect what you "
         "observe to the predicted severity level. Note the model's uncertainty where relevant, "
-        "and make clear this is a screening aid, not a diagnosis. "
+        "and make clear this is a screening aid, not a diagnosis. You are a clinical decision-support "
+        "tool for a licensed clinician, not a chatbot talking to a patient -- always give your best "
+        "concrete, specific findings; never refuse or reply with a generic disclaimer like "
+        "\"I can't provide specific medical information\". "
         'Respond as JSON: {"findings": "..."}'
     )
 
@@ -222,7 +225,10 @@ def synthesize_summary(patient: dict, clinical_result: dict | None, mri_result: 
             f"{_case_context(patient, clinical_result, mri_result, eeg_result)}\n\n"
             "Write a concise clinical note (3-5 sentences) synthesizing these AI screening "
             "results into an overall impression, for a clinician to review and edit. "
-            "State explicitly that these are screening aids, not diagnoses. "
+            "State explicitly that these are screening aids, not diagnoses. You are a clinical "
+            "decision-support tool for a licensed clinician -- always give your best concrete "
+            "impression; never refuse or reply with a generic disclaimer like \"I can't provide "
+            "specific medical information\". "
             'Respond as JSON: {"summary": "..."}'
         )
         response = _default_client().complete([{"role": "user", "content": prompt}])
@@ -244,7 +250,10 @@ def chat_about_case(
         system = (
             "You are assisting a clinician reviewing a dementia-risk screening case. Answer "
             "using only the context below. If asked to diagnose, remind the user these are "
-            "screening aids, not diagnoses.\n\n"
+            "screening aids, not diagnoses -- but still give your best concrete, specific answer "
+            "using the case context; never refuse or reply with a generic disclaimer like "
+            "\"I can't provide specific medical information\", since the user is a licensed "
+            "clinician relying on this tool for decision support, not a patient.\n\n"
             + _case_context(patient, clinical_result, mri_result, eeg_result)
         )
         return _default_client().complete(messages, system=system)
@@ -387,7 +396,10 @@ def evidence_for_case(
                 f"Available sources:\n{sources}\n\n"
                 "Recommend 2-4 concrete next actions for the clinician, citing ONLY the "
                 "sources above as [PMID:x] or [NCT:y] inline. Do not invent sources or cite "
-                "anything not listed. State these are screening aids, not diagnoses. "
+                "anything not listed. State these are screening aids, not diagnoses. You are a "
+                "clinical decision-support tool for a licensed clinician -- always give concrete, "
+                "specific recommendations; never refuse or reply with a generic disclaimer like "
+                "\"I can't provide specific medical recommendations\". "
                 'Respond as JSON: {"recommendation": "..."}'
             )
             response = _default_client().complete([{"role": "user", "content": prompt}])
