@@ -1,9 +1,24 @@
 """Top contributing factors from the logistic regression's own coefficients — no SHAP needed."""
+import logging
+
 import pandas as pd
 from sklearn.pipeline import Pipeline
 
 from alz.data import FEATURE_COLUMNS, load_population
 from alz.fusion import integrated_score
+
+_log = logging.getLogger(__name__)
+
+
+def _strip_code_fence(text: str) -> str:
+    """Strip a markdown ```json ... ``` fence some models wrap JSON responses in."""
+    text = text.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
+        if text.endswith("```"):
+            text = text[: -3]
+    return text.strip()
+
 
 _MRI_CLASS_MEANINGS = (
     "Non Demented: no clinical signs of cognitive decline. "
@@ -77,8 +92,9 @@ def _attention_summary(cam) -> str:
 def _vision_findings(image_bytes: bytes, prompt: str) -> str:
     """Neuro-relevant findings from a vision-capable LLM looking at the actual scan.
 
-    Uses HuggingFace's Llama-3.2-11B-Vision-Instruct. Requires HF_TOKEN in the environment
-    (and acceptance of the gated model's license on HuggingFace).
+    Uses HuggingFace's gemma-3-27b-it (Llama-3.2-11B-Vision-Instruct was dropped from
+    HF's Inference Providers catalog -- inferenceProviderMapping is now empty for it).
+    Requires HF_TOKEN in the environment.
     """
     import base64
     import io
@@ -88,13 +104,19 @@ def _vision_findings(image_bytes: bytes, prompt: str) -> str:
     from huggingface_hub import InferenceClient
     from PIL import Image
 
+    try:
+        from dotenv import load_dotenv
+        load_dotenv()
+    except ImportError:
+        pass
+
     png_buf = io.BytesIO()
     Image.open(io.BytesIO(image_bytes)).convert("RGB").save(png_buf, format="PNG")
     b64 = base64.b64encode(png_buf.getvalue()).decode()
 
     client = InferenceClient(token=os.getenv("HF_TOKEN"))
     response = client.chat_completion(
-        model="meta-llama/Llama-3.2-11B-Vision-Instruct",
+        model="google/gemma-3-27b-it",
         messages=[
             {
                 "role": "user",
@@ -106,7 +128,7 @@ def _vision_findings(image_bytes: bytes, prompt: str) -> str:
         ],
         max_tokens=512,
     )
-    return _coerce_findings_text(json.loads(response.choices[0].message.content)["findings"])
+    return _coerce_findings_text(json.loads(_strip_code_fence(response.choices[0].message.content), strict=False)["findings"])
 
 
 def _findings_prompt(result: dict, attention: str | None) -> str:
@@ -148,12 +170,13 @@ def explain_mri(result: dict, image_bytes: bytes | None = None, cam=None) -> str
         try:
             return _vision_findings(image_bytes, prompt)
         except Exception:
-            pass
+            _log.exception("Vision LLM findings failed, falling back to text LLM")
 
     try:
         response = _default_client().complete([{"role": "user", "content": prompt}])
-        return _coerce_findings_text(json.loads(response)["findings"])
+        return _coerce_findings_text(json.loads(_strip_code_fence(response), strict=False)["findings"])
     except Exception:
+        _log.exception("explain_mri LLM call failed")
         return None
 
 
@@ -203,8 +226,9 @@ def synthesize_summary(patient: dict, clinical_result: dict | None, mri_result: 
             'Respond as JSON: {"summary": "..."}'
         )
         response = _default_client().complete([{"role": "user", "content": prompt}])
-        return json.loads(response)["summary"]
+        return json.loads(_strip_code_fence(response), strict=False)["summary"]
     except Exception:
+        _log.exception("synthesize_summary LLM call failed")
         return None
 
 
@@ -225,6 +249,7 @@ def chat_about_case(
         )
         return _default_client().complete(messages, system=system)
     except Exception:
+        _log.exception("chat_about_case LLM call failed")
         return None
 
 
@@ -322,9 +347,9 @@ def _coerce_findings_text(value) -> str:
     if isinstance(value, str):
         return value
     if isinstance(value, dict):
-        return " ".join(f"{k.replace('_', ' ').capitalize()}: {_coerce_findings_text(v)}" for k, v in value.items())
+        return "\n\n".join(f"{k.replace('_', ' ').capitalize()}: {_coerce_findings_text(v)}" for k, v in value.items())
     if isinstance(value, list):
-        return " ".join(_coerce_findings_text(item) for item in value)
+        return "\n\n".join(_coerce_findings_text(item) for item in value)
     return str(value)
 
 
@@ -366,8 +391,9 @@ def evidence_for_case(
                 'Respond as JSON: {"recommendation": "..."}'
             )
             response = _default_client().complete([{"role": "user", "content": prompt}])
-            recommendation = _format_recommendation(json.loads(response)["recommendation"])
+            recommendation = _format_recommendation(json.loads(_strip_code_fence(response), strict=False)["recommendation"])
         except Exception:
+            _log.exception("evidence_for_case recommendation LLM call failed")
             recommendation = None
 
     return {"recommendation": recommendation, "pubmed": pubmed, "trials": trials}

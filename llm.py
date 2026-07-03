@@ -74,7 +74,6 @@ class GroqClient(LLMClient):
             model=self.model,
             messages=msgs,
             max_tokens=4096,
-            response_format={"type": "json_object"},
         )
         return resp.choices[0].message.content
 

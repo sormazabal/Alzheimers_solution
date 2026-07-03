@@ -162,11 +162,12 @@ with tab_overview:
             )
             st.caption(fused["note"])
             with st.expander("How this was combined"):
+                st.caption("Each modality's own dementia-risk estimate (not shares of a total):")
                 for c in fused["components"]:
-                    st.caption(f"{c['modality']}: {c['p']:.0%} (weight {c['weight']:.1f})")
+                    st.caption(f"{c['modality']}: {c['p']:.0%}, weighted {c['weight']:.1f}x")
                 st.caption(
-                    "Fused via a logarithmic opinion pool (weighted average in log-odds space) — "
-                    "see docs/fusion-methodology.md."
+                    "These are averaged in log-odds space (a logarithmic opinion pool) to "
+                    "produce the combined probability above."
                 )
         else:
             st.caption("Run at least one assessment to see the integrated score.")
