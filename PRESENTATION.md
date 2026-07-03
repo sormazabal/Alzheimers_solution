@@ -14,10 +14,10 @@
 - Conclusion
 
 ## Slide 3: Project overview and client value
-**Overview:** A proof-of-capability screening pipeline for Siemens Digital Health / SHS AI. It takes cognitive scores + demographics and returns an Alzheimer's risk score with the top contributing factors, *before* imaging is ordered. A phase-2 module adds MRI-based 4-class severity classification.
-**Key objective:** Flag at-risk patients early from data clinics already collect, so imaging and specialist time are spent where they matter.
-**Client value:** Triage before imaging = fewer unnecessary scans and lower cost per screened patient; an honest, coefficient-based explanation per prediction supports clinical trust; one function-call seam (`alz.predict`) means any Siemens system (UI, API, notebook) integrates without bespoke glue. Positions SHS toward the multi-modal (tabular + imaging) differentiator.
-**Status:** MVP. Phase 1 (tabular risk) built and tested; phase 2 (MRI severity) implemented and tested on synthetic data. Multi-modal fusion, auth, Docker, model registry, CI deliberately deferred.
+**Overview:** A proof-of-capability screening pipeline for Siemens Digital Health / SHS AI. It takes cognitive scores + demographics and returns an Alzheimer's risk score with the top contributing factors, *before* imaging is ordered. MRI-based severity classification and EEG-based confirmation each add an independent signal, fused into one integrated prognosis, with an LLM decision-support layer (doctor summary, grounded Q&A, live evidence retrieval) on top.
+**Key objective:** Flag at-risk patients early from data clinics already collect, so imaging and specialist time are spent where they matter — then let clinicians confirm and act on that signal without leaving the tool.
+**Client value:** Triage before imaging = fewer unnecessary scans and lower cost per screened patient; an honest, coefficient-based explanation per prediction (plus Grad-CAM for MRI) supports clinical trust; one function-call seam (`alz.predict`) means any Siemens system (UI, API, notebook) integrates without bespoke glue. Multi-modal fusion — the stated SHS differentiator — is implemented, not aspirational.
+**Status:** MVP+. Tabular risk, MRI severity, and EEG classification are each built and tested; a logarithmic-opinion-pool fusion combines whichever are available into one score; an LLM layer adds doctor-facing summaries, MRI narratives, case Q&A, and live PubMed/ClinicalTrials.gov evidence. Auth, Docker, model registry, CI, and real EHR integration deliberately deferred.
 **Category:** Clinical / digital-health machine learning.
 
 ## Slide 4: Client pains and system challenges
@@ -37,26 +37,33 @@
 - **Tabular risk model:** sklearn `Pipeline(impute → scale → LogisticRegression)`. Logistic regression chosen over the reference RandomForest so coefficients give a direct, honest explanation.
 - **Built-in explainability:** `explain.top_drivers()` ranks features by `scaled_value × coefficient` — top-3 "raises/lowers risk" factors, no SHAP dependency.
 - **Leakage guard:** `CDR` dropped as a predictor by design (documented in `data.py`).
-- **Phase-2 MRI confirmation:** ImageNet-pretrained ResNet18, frozen backbone + retrained head, 4-class severity (Non Demented / Very mild / Mild / Moderate Dementia); inverse-frequency class weights for imbalance; runs on CPU, uses GPU when present.
+- **MRI confirmation:** ImageNet-pretrained ResNet18, frozen backbone + retrained head, severity classification (Non Demented / Mild / Moderate Dementia); inverse-frequency class weights for imbalance; Grad-CAM overlay shows which scan regions drove the prediction; runs on CPU, uses GPU when present.
+- **EEG confirmation:** relative band-power features (delta–gamma + theta/alpha and slowing ratios, the textbook AD-EEG signature) into a `StandardScaler + LogisticRegression(class_weight="balanced")` pipeline — same explainable shape as the tabular model, sized for the small (n≈65) labeled EEG dataset available.
+- **Integrated prognosis:** `fusion.integrated_score()` combines whichever modalities are available (clinical, MRI, EEG) via a **logarithmic opinion pool** — a weighted average in log-odds space, so a confident modality naturally dominates an uncertain one without hand-tuned weights (see `docs/fusion-methodology.md`).
+- **LLM decision-support layer** (`explain.py`): doctor-facing case summary (`synthesize_summary`), plain-language MRI findings grounded in the scan + Grad-CAM (`explain_mri`), free-form case Q&A (`chat_about_case`), and live evidence retrieval — PubMed guidelines + ClinicalTrials.gov recruiting trials with clickable PMID/NCT provenance, feeding a citation-grounded recommendation (`evidence_for_case`). Every LLM call degrades to `None`/empty on failure rather than breaking the UI.
 - **Thin service layer:** FastAPI `/predict` + `/health` wrapping the same seam; `load_model` is `@lru_cache`'d so the model loads once per process.
 
 ## Slide 6: Architecture details
 **Layer 1 — User interface and interaction:**
-- Streamlit demo ([app/streamlit_app.py](app/streamlit_app.py)) — "Clinical risk" tab (patient form → score + drivers) and "MRI severity" tab (scan upload → severity + probability bar chart).
+- Streamlit clinical workstation ([app/streamlit_app.py](app/streamlit_app.py)) — 4 tabs: **Clinical risk** (patient form → score + drivers), **MRI records** (scan upload → severity + Grad-CAM + AI findings), **EEG records** (recording → band-power classification + signal viewer), **Overview** (integrated prognosis, AI case summary, live evidence, case chat).
 - FastAPI service ([app/api.py](app/api.py)) — `POST /predict` (Pydantic-validated `PatientRecord`) and `GET /health`.
 - CLIs: [train.py](train.py), [train_mri.py](train_mri.py), [evaluate_mri.py](evaluate_mri.py).
 
 **Layer 2 — System logic ([src/alz/](src/alz/)):**
 - `data.py` — OASIS-2 load/validate/clean; defines `FEATURE_COLUMNS`; `record_to_frame()` turns a patient dict into a feature row.
 - `model.py` — build/train/save/load pipeline; `predict()` → `{score, label}`.
-- `explain.py` — `top_drivers()` coefficient-based factor ranking.
-- `imaging.py` — phase-2 ResNet18: `train_mri`, `evaluate_mri`, `predict_mri` / `predict_mri_probs`; shared 70/15/15 split so eval matches training.
+- `imaging.py` — ResNet18 severity classifier: `train_mri`, `evaluate_mri`, `predict_mri` / `predict_mri_probs`, `gradcam_mri`; shared 70/15/15 split so eval matches training.
+- `eeg.py` — band-power feature extraction (`extract_features`) + logistic regression: `train_eeg`, `predict_eeg` / `predict_eeg_probs`.
+- `fusion.py` — `integrated_score()`: logarithmic-opinion-pool fusion of whichever modalities are present into one prognosis.
+- `explain.py` — `top_drivers()` (tabular coefficient ranking), `synthesize_summary()`, `explain_mri()`, `chat_about_case()`, `evidence_for_case()` (live PubMed/ClinicalTrials.gov retrieval + grounded recommendation).
 - `__init__.py` — public `predict()` seam composing the above.
 
 **Layer 3 — Data sources:**
 - Local tabular CSV `data/oasis_longitudinal.csv` (synthetic sample).
 - Kaggle imaging dataset `ninadaithal/imagesoasis` via `download_oasis.py` (kagglehub cache).
-- Saved model artifacts: `models/model.joblib`, `models/mri_model.pt`.
+- EEG dataset `ds004504` (real, publicly available OpenNeuro AHEPA resting-state recordings).
+- Saved model artifacts: `models/model.joblib`, `models/mri_model.pt`, `models/eeg_model.joblib`.
+- Live external APIs: PubMed E-utilities, ClinicalTrials.gov v2 (no API key required).
 
 **Example I/O (from [tests/test_api.py](tests/test_api.py) / README):**
 ```json
@@ -65,6 +72,53 @@
 // response
 {"score":0.12,"label":"Normal","drivers":[{"feature":"MMSE","direction":"lowers risk"}, ...]}
 ```
+
+## Slide 6b: How each model computes its score
+
+**Clinical (tabular):** 9 features → mean-imputation → standardization → logistic
+regression. `score = predict_proba()[1]`, the model's own probability of the "at-risk"
+class. Explanation is not a separate step bolted on afterward — `top_drivers()` reads the
+same coefficients the model used to score, ranking features by `scaled_value × coefficient`.
+
+**MRI severity:** a brain-slice image → ResNet18 (frozen ImageNet backbone, retrained
+final layer) → softmax over severity classes. `score` is the winning class's probability.
+Grad-CAM (`gradcam_mri`) backprops the winning class's logit into the last convolutional
+block to show *which pixels* drove that softmax output, as a heatmap overlay.
+
+**EEG:** a resting-state recording → relative band power (delta/theta/alpha/beta/gamma)
+plus two "slowing" ratios that summarize the classic AD-EEG pattern (more low-frequency,
+less high-frequency power) → standardized logistic regression. `score = P(AD pattern)`.
+
+**Integrated prognosis:** each modality's own probability is converted to log-odds
+(`logit(p) = log(p/(1-p))`), averaged (equal weight by default), and converted back with
+a sigmoid:
+
+```
+logit(P_fused) = ( Σ rᵢ · logit(pᵢ) ) / ( Σ rᵢ )
+P_fused        = sigmoid(logit(P_fused))
+```
+
+A modality near p≈0.5 (uncertain) has logit≈0 and barely moves the fused result; a
+confident modality (p near 0 or 1) pulls the fused score strongly toward it — so a
+stronger signal dominates a weaker one without any hand-picked weighting. Full
+justification and limitations: [docs/fusion-methodology.md](docs/fusion-methodology.md).
+
+### Model metrics
+
+| Model | Algorithm | Reported metric | Result | Eval split | Data used |
+|---|---|---|---|---|---|
+| Clinical | Logistic regression (9 features) | Held-out accuracy | **0.76** | Stratified 75/25 | Synthetic `oasis_longitudinal.csv` (82 rows) — indicative only, not a real-world benchmark |
+| MRI severity | ResNet18 (frozen backbone, retrained head) | Accuracy / AUROC / AUPRC | **train 1.00 / val 1.00 / test 1.00** acc; AUROC/AUPRC n/a (see note) | 70/15/15 | Real Kaggle `imagesoasis` mirror (~23k slices) |
+| EEG | Logistic regression on band-power features | Mean 5-fold CV accuracy | **0.75** | Stratified 5-fold CV (n=65) | Real ds004504 (AHEPA resting-state EEG) |
+| Integrated prognosis | Logarithmic opinion pool (no trained parameters) | — | Not separately benchmarked | — | No paired multi-modal ground truth exists to validate against (see methodology doc) |
+
+**Note on the MRI row:** 1.00 accuracy reflects near-ceiling performance for this
+class-imbalanced dataset combined with a limited (frozen-backbone, head-only) model — it
+is not proof of clinical-grade generalization, and AUROC/AUPRC report `n/a` when
+sklearn's scorers can't compute an ROC/PR curve for a class with no predicted negatives.
+Treat this as an existence proof that the pipeline trains and evaluates correctly, not as
+a validated accuracy claim; production use requires evaluation on a held-out clinical
+cohort, not the same public source distribution the model trained on.
 
 ## Slide 7: Dataset overview
 
