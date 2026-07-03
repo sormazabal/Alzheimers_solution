@@ -388,6 +388,7 @@ with tab_mri:
                 st.plotly_chart(bar, use_container_width=True)
 
                 img_col, cam_col = st.columns(2)
+                cam = None
                 with img_col:
                     st.image(scan["bytes"], caption="Uploaded scan", use_container_width=True)
                 with cam_col:
@@ -410,7 +411,9 @@ with tab_mri:
                 st.subheader("Radiology report summary")
                 with st.container(border=True):
                     with st.spinner("Generating explanation..."):
-                        explanation = explain_mri(result)
+                        explanation = explain_mri(
+                            result, image_bytes=scan["bytes"], cam=(cam or {}).get("cam")
+                        )
                     st.markdown(f"**IMPRESSION:** {result['label']} ({result['score']:.0%} model confidence)")
                     st.markdown("**FINDINGS:**")
                     if explanation:

@@ -314,7 +314,8 @@ def predict_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
 def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     """Grad-CAM overlay showing which regions of the scan drove the prediction.
 
-    Returns {'overlay': PIL.Image (224x224 RGB), 'label': str, 'score': float}.
+    Returns {'overlay': PIL.Image (224x224 RGB), 'label': str, 'score': float,
+    'cam': np.ndarray (224x224, normalized 0-1 attention map)}.
 
     ponytail: plain hook-based Grad-CAM on model.layer4[-1] (the stock ResNet18's last conv
     block) -- swap for captum/grad-cam only if a fancier variant (Grad-CAM++, etc.) is needed.
@@ -374,4 +375,5 @@ def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
         "overlay": Image.fromarray(blended),
         "label": classes[label_idx],
         "score": score,
+        "cam": cam,
     }

@@ -46,30 +46,112 @@ def _default_client():
     return default_client()
 
 
-def explain_mri(result: dict) -> str | None:
-    """Plain-language narrative for an MRI severity prediction, via the configured LLM.
+def _attention_summary(cam) -> str:
+    """Turn a 224x224 Grad-CAM array into a short phrase a clinician can read.
 
-    'result' is predict_mri_probs()'s output: {'probs', 'label', 'score'}. Returns None if
-    the LLM call fails for any reason (missing key, package not installed, network) so the
-    UI can degrade gracefully.
+    Derives coarse location (center/periventricular vs peripheral/cortical, top/mid/bottom),
+    left-right symmetry, and focal-vs-diffuse spread. No anatomical atlas is involved -- this
+    describes where the *model* attended, not confirmed anatomy.
+    """
+    h, w = cam.shape
+    ys, xs = (cam > cam.mean() + cam.std()).nonzero() if (cam > cam.mean() + cam.std()).any() else cam.nonzero()
+    cy, cx = (ys.mean() if len(ys) else h / 2), (xs.mean() if len(xs) else w / 2)
+
+    frac_h = cy / h
+    vertical = "superior" if frac_h < 0.4 else "inferior" if frac_h > 0.6 else "mid"
+    frac_w = cx / w
+    horiz_dist = abs(frac_w - 0.5)
+    location = "central/periventricular" if horiz_dist < 0.2 else "peripheral/cortical"
+
+    left_mean = cam[:, : w // 2].mean()
+    right_mean = cam[:, w // 2 :].mean()
+    diff = abs(left_mean - right_mean) / (left_mean + right_mean + 1e-8)
+    symmetry = "roughly symmetric" if diff < 0.15 else ("left-dominant" if left_mean > right_mean else "right-dominant")
+
+    focal = "focal" if (cam > 0.5).mean() < 0.25 else "diffuse"
+
+    return f"strongest in the {vertical}, {location} region, {symmetry}, and {focal} in spread"
+
+
+def _vision_findings(image_bytes: bytes, prompt: str) -> str:
+    """Neuro-relevant findings from a vision-capable LLM looking at the actual scan.
+
+    Uses HuggingFace's Llama-3.2-11B-Vision-Instruct. Requires HF_TOKEN in the environment
+    (and acceptance of the gated model's license on HuggingFace).
+    """
+    import base64
+    import io
+    import json
+    import os
+
+    from huggingface_hub import InferenceClient
+    from PIL import Image
+
+    png_buf = io.BytesIO()
+    Image.open(io.BytesIO(image_bytes)).convert("RGB").save(png_buf, format="PNG")
+    b64 = base64.b64encode(png_buf.getvalue()).decode()
+
+    client = InferenceClient(token=os.getenv("HF_TOKEN"))
+    response = client.chat_completion(
+        model="meta-llama/Llama-3.2-11B-Vision-Instruct",
+        messages=[
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "image_url", "image_url": {"url": f"data:image/png;base64,{b64}"}},
+                ],
+            }
+        ],
+        max_tokens=512,
+    )
+    return json.loads(response.choices[0].message.content)["findings"]
+
+
+def _findings_prompt(result: dict, attention: str | None) -> str:
+    probs_str = ", ".join(f"{c}: {p:.1%}" for c, p in result["probs"].items())
+    attention_line = (
+        f"The model's Grad-CAM attention was {attention}. " if attention else ""
+    )
+    return (
+        f"An MRI-based dementia severity classifier predicted '{result['label']}' "
+        f"with {result['score']:.1%} confidence. Full class probabilities: {probs_str}. "
+        f"Class meanings: {_MRI_CLASS_MEANINGS} {attention_line}"
+        "In 2-3 sentences, comment on neurologically relevant structural features visible "
+        "in the scan -- lateral ventricle size, medial-temporal/hippocampal atrophy, cortical "
+        "sulcal widening or global atrophy, and hemispheric symmetry -- and connect what you "
+        "observe to the predicted severity level. Note the model's uncertainty where relevant, "
+        "and make clear this is a screening aid, not a diagnosis. "
+        'Respond as JSON: {"findings": "..."}'
+    )
+
+
+def explain_mri(result: dict, image_bytes: bytes | None = None, cam=None) -> str | None:
+    """Plain-language radiology-style findings for an MRI severity prediction.
+
+    'result' is predict_mri_probs()'s output: {'probs', 'label', 'score'}. When 'image_bytes'
+    is given, a vision LLM looks at the actual scan and comments on structural features
+    (ventricles, atrophy, symmetry). Otherwise (or if the vision call fails), falls back to a
+    text LLM describing where the Grad-CAM 'cam' array shows the model's attention. Returns
+    None if everything fails (missing key, package not installed, network) so the UI can
+    degrade gracefully.
 
     ponytail: one hardcoded prompt, no caching/retries -- add if this becomes a hot path.
     """
     import json
 
+    attention = _attention_summary(cam) if cam is not None else None
+    prompt = _findings_prompt(result, attention)
+
+    if image_bytes is not None:
+        try:
+            return _vision_findings(image_bytes, prompt)
+        except Exception:
+            pass
+
     try:
-        probs_str = ", ".join(f"{c}: {p:.1%}" for c, p in result["probs"].items())
-        prompt = (
-            f"An MRI-based dementia severity classifier predicted '{result['label']}' "
-            f"with {result['score']:.1%} confidence. Full class probabilities: {probs_str}. "
-            f"Class meanings: {_MRI_CLASS_MEANINGS} "
-            "In 2-3 sentences, explain to a clinician in plain language why this severity "
-            "level was likely assigned, note the model's uncertainty where relevant, and "
-            "make clear this is a screening aid, not a diagnosis. "
-            'Respond as JSON: {"explanation": "..."}'
-        )
         response = _default_client().complete([{"role": "user", "content": prompt}])
-        return json.loads(response)["explanation"]
+        return json.loads(response)["findings"]
     except Exception:
         return None
 

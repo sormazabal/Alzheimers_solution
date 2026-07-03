@@ -7,3 +7,4 @@ pillow
 kagglehub
 scikit-learn
 matplotlib
+huggingface_hub
