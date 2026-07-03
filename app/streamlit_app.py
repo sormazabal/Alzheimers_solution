@@ -19,6 +19,7 @@ import streamlit as st
 from alz import predict
 from alz.data import FEATURE_META, load_population
 from alz.explain import chat_about_case, evidence_for_case, explain_mri, synthesize_summary
+from alz.fusion import integrated_score
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "TAO_logo.png"), size="large")
@@ -107,6 +108,17 @@ with st.sidebar:
     st.caption(f"{patient['name']} · {patient['sex']} · DOB {patient['dob']} · ID {patient['id']}")
 
     st.divider()
+    fused_sidebar = integrated_score(
+        clinical=st.session_state.clinical_result,
+        mri=(st.session_state.mri_selected or {}).get("result"),
+        eeg=st.session_state.eeg_result,
+    )
+    if fused_sidebar:
+        label, level = band_for_score(fused_sidebar["score"])
+        st.markdown(f"Integrated prognosis: {chip(label, level)} ({fused_sidebar['score']:.0%})", unsafe_allow_html=True)
+    else:
+        st.caption("Integrated prognosis: not yet assessed")
+
     st.caption("Latest assessments")
     if st.session_state.clinical_result:
         label, level = band_for_score(st.session_state.clinical_result["score"])
@@ -133,6 +145,32 @@ tab_overview, tab_clinical, tab_mri, tab_eeg = st.tabs(
 # ---------------------------------------------------------------------------
 with tab_overview:
     st.subheader("Assessment summary")
+
+    fused = integrated_score(
+        clinical=st.session_state.clinical_result,
+        mri=(st.session_state.mri_selected or {}).get("result"),
+        eeg=st.session_state.eeg_result,
+    )
+    with st.container(border=True):
+        st.caption("Integrated prognosis")
+        if fused:
+            label, level = band_for_score(fused["score"])
+            st.markdown(
+                f'{chip(label, level)} &nbsp; <span style="font-size:1.4em; font-weight:600;">'
+                f'{fused["score"]:.0%}</span> <span style="opacity:0.7;">posterior probability of dementia</span>',
+                unsafe_allow_html=True,
+            )
+            st.caption(fused["note"])
+            with st.expander("How this was combined"):
+                for c in fused["components"]:
+                    st.caption(f"{c['modality']}: {c['p']:.0%} (weight {c['weight']:.1f})")
+                st.caption(
+                    "Fused via a logarithmic opinion pool (weighted average in log-odds space) — "
+                    "see docs/fusion-methodology.md."
+                )
+        else:
+            st.caption("Run at least one assessment to see the integrated score.")
+
     cols = st.columns(4)
 
     with cols[0]:

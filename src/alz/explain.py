@@ -3,6 +3,7 @@ import pandas as pd
 from sklearn.pipeline import Pipeline
 
 from alz.data import FEATURE_COLUMNS, load_population
+from alz.fusion import integrated_score
 
 _MRI_CLASS_MEANINGS = (
     "Non Demented: no clinical signs of cognitive decline. "
@@ -178,6 +179,10 @@ def _case_context(patient: dict, clinical_result: dict | None, mri_result: dict 
         lines.append(f"EEG classification: {eeg_result['label']} ({eeg_result['score']:.0%} confidence).")
     else:
         lines.append("EEG classification: not yet assessed.")
+
+    fused = integrated_score(clinical=clinical_result, mri=mri_result, eeg=eeg_result)
+    if fused:
+        lines.append(f"Integrated prognosis ({fused['note']}): {fused['score']:.0%} posterior probability of dementia.")
 
     return "\n".join(lines)
 
