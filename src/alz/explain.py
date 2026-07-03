@@ -1,4 +1,5 @@
 """Top contributing factors from the logistic regression's own coefficients — no SHAP needed."""
+import json
 import logging
 
 import pandas as pd
@@ -11,13 +12,142 @@ _log = logging.getLogger(__name__)
 
 
 def _strip_code_fence(text: str) -> str:
-    """Strip a markdown ```json ... ``` fence some models wrap JSON responses in."""
+    """Strip markdown code fences, fix truncated JSON, or extract and merge JSON structures from text."""
+    import re
     text = text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1] if "\n" in text else text[3:]
-        if text.endswith("```"):
-            text = text[: -3]
-    return text.strip()
+
+    def fix_truncated_json(t: str) -> str:
+        t = t.strip()
+        if not t:
+            return t
+        stack = []
+        in_string = False
+        escape = False
+        for char in t:
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == '\\':
+                    escape = True
+                elif char == '"':
+                    in_string = False
+            else:
+                if char == '"':
+                    in_string = True
+                elif char in ('{', '['):
+                    stack.append(char)
+                elif char == '}' and stack and stack[-1] == '{':
+                    stack.pop()
+                elif char == ']' and stack and stack[-1] == '[':
+                    stack.pop()
+        if in_string:
+            t += '"'
+        for open_char in reversed(stack):
+            if open_char == '{':
+                t += '}'
+            elif open_char == '[':
+                t += ']'
+        return t
+
+    # Try direct parsing first
+    try:
+        json.loads(text, strict=False)
+        return text
+    except json.JSONDecodeError:
+        pass
+
+    # Strip markdown code fences if present
+    fence_pattern = re.compile(r'```(?:json)?\s*(.*?)\s*```', re.DOTALL)
+    match = fence_pattern.search(text)
+    if match:
+        fence_content = match.group(1).strip()
+        try:
+            json.loads(fence_content, strict=False)
+            return fence_content
+        except json.JSONDecodeError:
+            text = fence_content
+
+    # Try fixing truncation on the whole text first
+    fixed_text = fix_truncated_json(text)
+    try:
+        json.loads(fixed_text, strict=False)
+        return fixed_text
+    except json.JSONDecodeError:
+        pass
+
+    # Extract and merge all JSON objects {...}
+    parsed_objects = []
+    i = 0
+    while i < len(text):
+        start = text.find('{', i)
+        if start == -1:
+            break
+        brace_count = 0
+        in_string = False
+        escape = False
+        end = -1
+        for j in range(start, len(text)):
+            char = text[j]
+            if in_string:
+                if escape:
+                    escape = False
+                elif char == '\\':
+                    escape = True
+                elif char == '"':
+                    in_string = False
+            else:
+                if char == '"':
+                    in_string = True
+                elif char == '{':
+                    brace_count += 1
+                elif char == '}':
+                    brace_count -= 1
+                    if brace_count == 0:
+                        end = j
+                        break
+        if end != -1:
+            candidate = text[start:end+1]
+            try:
+                obj = json.loads(candidate, strict=False)
+                if isinstance(obj, dict):
+                    parsed_objects.append(obj)
+            except json.JSONDecodeError:
+                try:
+                    fixed_candidate = fix_truncated_json(candidate)
+                    obj = json.loads(fixed_candidate, strict=False)
+                    if isinstance(obj, dict):
+                        parsed_objects.append(obj)
+                except json.JSONDecodeError:
+                    pass
+            i = end + 1
+        else:
+            remainder = text[start:]
+            try:
+                fixed_remainder = fix_truncated_json(remainder)
+                obj = json.loads(fixed_remainder, strict=False)
+                if isinstance(obj, dict):
+                    parsed_objects.append(obj)
+                break
+            except json.JSONDecodeError:
+                pass
+            i = start + 1
+
+    if parsed_objects:
+        merged = {}
+        for obj in parsed_objects:
+            for k, v in obj.items():
+                if k in merged:
+                    if not isinstance(merged[k], list):
+                        merged[k] = [merged[k]]
+                    if isinstance(v, list):
+                        merged[k].extend(v)
+                    else:
+                        merged[k].append(v)
+                else:
+                    merged[k] = v
+        return json.dumps(merged)
+
+    return fixed_text
 
 
 _MRI_CLASS_MEANINGS = (
@@ -335,14 +465,17 @@ def _format_recommendation(value) -> str:
     """Coerce the LLM's 'recommendation' field to text, however it's shaped.
 
     The prompt asks for a plain string but LLMs don't always comply -- e.g. they
-    sometimes return a list of {"action", "rationale"} objects instead. Passing
-    a non-string straight to st.write() would render it as a raw JSON tree, so
+    sometimes return a list of {"action", "rationale"} objects or a list of strings instead.
+    Passing a non-string straight to st.write() would render it as a raw JSON tree, so
     normalize here.
     """
     if isinstance(value, str):
         return value
-    if isinstance(value, list) and all(isinstance(item, dict) and "action" in item for item in value):
-        return "\n".join(f"- **{item['action']}**: {item.get('rationale', '')}" for item in value)
+    if isinstance(value, list):
+        if all(isinstance(item, dict) and "action" in item for item in value):
+            return "\n".join(f"- **{item['action']}**: {item.get('rationale', '')}" for item in value)
+        if all(isinstance(item, str) for item in value):
+            return "\n".join(f"- {item}" for item in value)
     return str(value)
 
 
@@ -399,8 +532,11 @@ def evidence_for_case(
                 "anything not listed. State these are screening aids, not diagnoses. You are a "
                 "clinical decision-support tool for a licensed clinician -- always give concrete, "
                 "specific recommendations; never refuse or reply with a generic disclaimer like "
-                "\"I can't provide specific medical recommendations\". "
-                'Respond as JSON: {"recommendation": "..."}'
+                "\"I can't provide specific medical recommendations\".\n\n"
+                "You MUST respond with a single, valid JSON object containing all your recommendations in a single string under the key \"recommendation\". Use bullet points inside the string for multiple recommendations.\n"
+                "Do not use unescaped double quotes inside the \"recommendation\" string value. If you need quotes inside the text, use single quotes (e.g., 'Appropriate use recommendations' instead of \"Appropriate use recommendations\").\n"
+                "Example format:\n"
+                '{\n  "recommendation": "- First action [PMID:123]\\n- Second action [NCT:456]"\n}'
             )
             response = _default_client().complete([{"role": "user", "content": prompt}])
             recommendation = _format_recommendation(json.loads(_strip_code_fence(response), strict=False)["recommendation"])
