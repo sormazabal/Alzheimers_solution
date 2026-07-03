@@ -328,7 +328,6 @@ def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
 
     import matplotlib
     matplotlib.use("Agg")
-    import matplotlib.cm as cm
 
     device = _device()
     model, classes = _load_mri_model(model_path, device)
@@ -367,7 +366,7 @@ def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
         handle_f.remove()
         handle_b.remove()
 
-    heatmap = (cm.get_cmap("jet")(cam)[:, :, :3] * 255).astype(np.uint8)
+    heatmap = (matplotlib.colormaps["jet"](cam)[:, :, :3] * 255).astype(np.uint8)
     base = np.asarray(display_image).astype(np.float32)
     blended = (0.5 * heatmap.astype(np.float32) + 0.5 * base).clip(0, 255).astype(np.uint8)
 

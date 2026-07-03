@@ -105,7 +105,7 @@ def _vision_findings(image_bytes: bytes, prompt: str) -> str:
         ],
         max_tokens=512,
     )
-    return json.loads(response.choices[0].message.content)["findings"]
+    return _coerce_findings_text(json.loads(response.choices[0].message.content)["findings"])
 
 
 def _findings_prompt(result: dict, attention: str | None) -> str:
@@ -151,7 +151,7 @@ def explain_mri(result: dict, image_bytes: bytes | None = None, cam=None) -> str
 
     try:
         response = _default_client().complete([{"role": "user", "content": prompt}])
-        return json.loads(response)["findings"]
+        return _coerce_findings_text(json.loads(response)["findings"])
     except Exception:
         return None
 
@@ -304,6 +304,22 @@ def _format_recommendation(value) -> str:
         return value
     if isinstance(value, list) and all(isinstance(item, dict) and "action" in item for item in value):
         return "\n".join(f"- **{item['action']}**: {item.get('rationale', '')}" for item in value)
+    return str(value)
+
+
+def _coerce_findings_text(value) -> str:
+    """Coerce the LLM's 'findings' field to text, however it's shaped -- recursively.
+
+    Some providers (Groq's JSON mode in particular) nest structured fields inside
+    'findings', sometimes several levels deep, instead of writing a plain sentence.
+    Flatten to readable text so the UI never renders a raw Python dict/list repr.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, dict):
+        return " ".join(f"{k.replace('_', ' ').capitalize()}: {_coerce_findings_text(v)}" for k, v in value.items())
+    if isinstance(value, list):
+        return " ".join(_coerce_findings_text(item) for item in value)
     return str(value)
 
 

@@ -9,6 +9,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 from alz.explain import (
     _attention_summary,
     _case_context,
+    _coerce_findings_text,
     _format_recommendation,
     _parse_pubmed,
     _parse_trials,
@@ -113,6 +114,45 @@ def test_explain_mri_fallback_uses_text_llm():
         explain_module._default_client = original
 
 
+def test_explain_mri_fallback_coerces_nested_findings():
+    """Regression: Groq's JSON mode sometimes nests structured data under 'findings',
+    sometimes multiple levels deep -- must not leak a raw dict/list repr to the UI."""
+    import alz.explain as explain_module
+
+    class _StubClient:
+        def complete(self, messages, system=""):
+            return (
+                '{"findings": {"lateral_ventricle_size": {"description": "Moderate enlargement", '
+                '"severity_level": "Mild Dementia"}, "commentary": "Consistent with mild dementia."}}'
+            )
+
+    original = explain_module._default_client
+    explain_module._default_client = lambda: _StubClient()
+    try:
+        result = {"probs": {"Non Demented": 0.1, "Mild Dementia": 0.9}, "label": "Mild Dementia", "score": 0.9}
+        findings = explain_mri(result)
+        assert isinstance(findings, str)
+        assert "Moderate enlargement" in findings
+        assert "{" not in findings
+    finally:
+        explain_module._default_client = original
+
+
+def test_coerce_findings_text_str_passthrough():
+    assert _coerce_findings_text("Plain sentence.") == "Plain sentence."
+
+
+def test_coerce_findings_text_dict():
+    text = _coerce_findings_text({"cortical_atrophy": "Present"})
+    assert text == "Cortical atrophy: Present"
+
+
+def test_coerce_findings_text_nested_dict():
+    text = _coerce_findings_text({"lateral_ventricle_size": {"description": "Enlarged", "severity": "Mild"}})
+    assert "{" not in text
+    assert "Enlarged" in text and "Mild" in text
+
+
 if __name__ == "__main__":
     test_case_context_all_missing()
     test_case_context_partial()
@@ -124,4 +164,8 @@ if __name__ == "__main__":
     test_attention_summary_center()
     test_attention_summary_left()
     test_explain_mri_fallback_uses_text_llm()
+    test_explain_mri_fallback_coerces_nested_findings()
+    test_coerce_findings_text_nested_dict()
+    test_coerce_findings_text_str_passthrough()
+    test_coerce_findings_text_dict()
     print("ok")
