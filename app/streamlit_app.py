@@ -360,7 +360,7 @@ with tab_clinical:
                     mode="lines+markers", line_color="#4C8BF5",
                 ))
                 spark.update_layout(height=100, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="MMSE")
-                st.plotly_chart(spark, use_container_width=True)
+                st.plotly_chart(spark, width="stretch")
 
             st.caption(
                 "From a logistic regression trained on these 9 clinical features; score is the "
@@ -406,7 +406,7 @@ with tab_clinical:
                         fig.add_trace(go.Histogram(x=population[driver["feature"]], name="Population", marker_color="#636EFA"))
                         fig.add_vline(x=driver["value"], line_color="crimson", line_width=2, annotation_text="This patient", annotation_position="top")
                         fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10), xaxis_title=label, showlegend=False)
-                    st.plotly_chart(fig, use_container_width=True)
+                    st.plotly_chart(fig, width="stretch")
 
 # ---------------------------------------------------------------------------
 # Tab 3: MRI records
@@ -450,17 +450,17 @@ with tab_mri:
                     text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
                 ))
                 bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
-                st.plotly_chart(bar, use_container_width=True)
+                st.plotly_chart(bar, width="stretch")
 
                 img_col, cam_col = st.columns(2)
                 cam = None
                 with img_col:
-                    st.image(scan["bytes"], caption="Uploaded scan", use_container_width=True)
+                    st.image(scan["bytes"], caption="Uploaded scan", width="stretch")
                 with cam_col:
                     try:
                         with st.spinner("Computing Grad-CAM heatmap..."):
                             cam = gradcam_mri(io.BytesIO(scan["bytes"]))
-                        st.image(cam["overlay"], caption="Grad-CAM: regions driving the prediction", use_container_width=True)
+                        st.image(cam["overlay"], caption="Grad-CAM: regions driving the prediction", width="stretch")
                     except Exception:
                         st.info("Heatmap unavailable for this image.")
 
@@ -564,7 +564,7 @@ with tab_eeg:
                 fig.add_trace(go.Scatter(x=t, y=signal[i] * 1e6 + i * 100, mode="lines", name=ch, line=dict(width=1)))
             fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(showticklabels=False), xaxis_title="Time (s)")
             st.subheader("Signal viewer")
-            st.plotly_chart(fig, use_container_width=True)
+            st.plotly_chart(fig, width="stretch")
 
         st.subheader("Evaluation results")
         m1, m2 = st.columns(2)
@@ -578,4 +578,4 @@ with tab_eeg:
                 title={"text": "P(Alzheimer's pattern) (%)"},
             ))
             gauge.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20))
-            st.plotly_chart(gauge, use_container_width=True)
+            st.plotly_chart(gauge, width="stretch")
