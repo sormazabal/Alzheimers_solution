@@ -1,0 +1,4 @@
+# Phase-3 only (EEG classification). Not needed for the tabular demo or requirements.txt.
+mne
+neurokit2
+openneuro-py

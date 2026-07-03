@@ -2,9 +2,7 @@
 
 No EHR/database exists yet -- patient context and cross-visit history live in
 st.session_state with a seeded demo patient (ponytail: swap for a real fetch when
-a patient store exists). Likewise there is no EEG model/data pipeline yet, so the
-EEG tab is an illustrative placeholder (ponytail: wire up a real model + parser
-when one exists).
+a patient store exists).
 """
 import io
 import os
@@ -323,13 +321,14 @@ with tab_clinical:
                          "(like nWBV) so brains of different physical sizes can be compared fairly. "
                          "It reflects skull/head size, not disease severity.",
                 )
+                mr_delay = st.number_input("MRI delay (days)", min_value=0, max_value=2000, value=0, help=FEATURE_META["MR Delay"]["definition"])
 
         submitted = st.form_submit_button("Assess risk")
 
     if submitted:
         record = {
             "Age": age, "EDUC": educ, "SES": ses, "MMSE": mmse,
-            "nWBV": nwbv, "ASF": asf, "Visit": visit, "MR Delay": 0,
+            "nWBV": nwbv, "ASF": asf, "Visit": visit, "MR Delay": mr_delay,
             "M/F": sex,
         }
         result = predict(record)
@@ -490,38 +489,82 @@ with tab_mri:
             st.caption("Upload a scan to begin.")
 
 # ---------------------------------------------------------------------------
-# Tab 4: EEG records (placeholder -- no EEG model/data pipeline exists yet)
+# Tab 4: EEG records
 # ---------------------------------------------------------------------------
+EEG_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "ds004504", "derivatives")
+EEG_PARTICIPANTS_TSV = os.path.join(os.path.dirname(__file__), "..", "data", "ds004504", "participants.tsv")
+
+
+@st.cache_data
+def _eeg_examples() -> list[dict]:
+    """A handful of real ds004504 subjects (2 AD + 2 healthy) for the demo dropdown."""
+    import pandas as pd
+
+    df = pd.read_csv(EEG_PARTICIPANTS_TSV, sep="\t")
+    examples = []
+    for group, group_label, n in [("A", "AD", 2), ("C", "CN", 2)]:
+        for _, row in df[df["Group"] == group].head(n).iterrows():
+            sub_id = row["participant_id"]
+            set_path = os.path.join(EEG_EXAMPLES_DIR, sub_id, "eeg", f"{sub_id}_task-eyesclosed_eeg.set")
+            if os.path.exists(set_path) and os.path.getsize(set_path) > 1000:
+                examples.append({
+                    "name": f"{sub_id} — {group_label} (MMSE {row['MMSE']})",
+                    "path": set_path,
+                })
+    return examples
+
+
 with tab_eeg:
-    st.caption("Illustrative preview only — no EEG model is wired up yet.")
     with st.container(border=True):
-        st.file_uploader("Upload EEG recording", type=["edf", "csv"])
-        recording = st.selectbox("Or select a prior recording", ["Visit 1 — 2024-03-02", "Visit 2 — 2024-09-14"])
+        uploaded_eeg = st.file_uploader("Upload EEG recording", type=["set"])
+        examples = _eeg_examples()
+        example_names = [e["name"] for e in examples]
+        chosen_example = st.selectbox("Or select a prior recording", example_names) if example_names else None
+        if not example_names:
+            st.caption("No example recordings available (dataset not downloaded).")
         run = st.button("Run evaluation")
 
     if run:
-        rng = np.random.default_rng(abs(hash(recording)) % (2**32))
-        slowing_p = float(rng.uniform(0.1, 0.9))
-        label, level = ("Generalized slowing suspected", "high") if slowing_p > 0.6 else (
-            ("Mild abnormality", "mild") if slowing_p > 0.3 else ("Normal background rhythm", "normal")
-        )
-        st.session_state.eeg_result = {"label": label, "score": slowing_p, "level": level, "recording": recording}
-        st.rerun()
+        try:
+            from alz.eeg import load_recording, predict_eeg_probs
+        except ImportError:
+            st.warning("EEG dependencies not installed — see requirements-eeg.txt")
+        else:
+            if uploaded_eeg is not None:
+                recording_source, recording_name = uploaded_eeg, uploaded_eeg.name
+            elif chosen_example is not None:
+                recording_source = next(e["path"] for e in examples if e["name"] == chosen_example)
+                recording_name = chosen_example
+            else:
+                recording_source = None
+
+            if recording_source is None:
+                st.warning("Upload a recording or select an example first.")
+            else:
+                with st.spinner("Extracting band-power features and scoring..."):
+                    raw = load_recording(recording_source)
+                    result = predict_eeg_probs(raw)
+                level = band_for_score(result["score"])[1]
+                st.session_state.eeg_result = {**result, "level": level, "recording": recording_name}
+                st.session_state.eeg_raw_signal = raw.get_data()[:6, : int(raw.info["sfreq"] * 4)]
+                st.session_state.eeg_raw_sfreq = raw.info["sfreq"]
+                st.session_state.eeg_raw_channels = raw.info["ch_names"][:6]
+                st.rerun()
 
     if st.session_state.eeg_result:
         eeg = st.session_state.eeg_result
-        label, level, slowing_p = eeg["label"], eeg["level"], eeg["score"]
+        label, level, score = eeg["label"], eeg["level"], eeg["score"]
 
-        rng = np.random.default_rng(abs(hash(eeg["recording"])) % (2**32))
-        channels = ["Fp1", "Fp2", "C3", "C4", "O1", "O2"]
-        t = np.linspace(0, 4, 1000)
-        fig = go.Figure()
-        for i, ch in enumerate(channels):
-            wave = np.sin(2 * np.pi * (1 + i * 0.5) * t) + rng.normal(0, 0.3, t.shape)
-            fig.add_trace(go.Scatter(x=t, y=wave + i * 4, mode="lines", name=ch, line=dict(width=1)))
-        fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(showticklabels=False), xaxis_title="Time (s)")
-        st.subheader("Signal viewer")
-        st.plotly_chart(fig, use_container_width=True)
+        if st.session_state.get("eeg_raw_signal") is not None:
+            signal = st.session_state.eeg_raw_signal
+            sfreq = st.session_state.eeg_raw_sfreq
+            t = np.arange(signal.shape[1]) / sfreq
+            fig = go.Figure()
+            for i, ch in enumerate(st.session_state.eeg_raw_channels):
+                fig.add_trace(go.Scatter(x=t, y=signal[i] * 1e6 + i * 100, mode="lines", name=ch, line=dict(width=1)))
+            fig.update_layout(height=350, margin=dict(l=10, r=10, t=10, b=10), yaxis=dict(showticklabels=False), xaxis_title="Time (s)")
+            st.subheader("Signal viewer")
+            st.plotly_chart(fig, use_container_width=True)
 
         st.subheader("Evaluation results")
         m1, m2 = st.columns(2)
@@ -529,9 +572,10 @@ with tab_eeg:
             st.markdown(chip(label, level), unsafe_allow_html=True)
         with m2:
             gauge = go.Figure(go.Indicator(
-                mode="gauge+number", value=slowing_p * 100,
+                mode="gauge+number", value=score * 100,
+                domain={"x": [0, 1], "y": [0, 1]},
                 gauge={"axis": {"range": [0, 100]}, "bar": {"color": SEVERITY_COLORS[level][0]}},
-                title={"text": "Confidence (%)"},
+                title={"text": "P(Alzheimer's pattern) (%)"},
             ))
-            gauge.update_layout(height=200, margin=dict(l=10, r=10, t=40, b=10))
+            gauge.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20))
             st.plotly_chart(gauge, use_container_width=True)

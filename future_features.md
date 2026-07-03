@@ -16,7 +16,7 @@ These features build directly on the existing architecture in `streamlit_app.py`
 
 These capabilities represent the unique value proposition of the platform and align with the stated goals in the documentation.
 
-* [ ] **Integrated score**: Both `PRESENTATION.md` and `README.md` explicitly note multi-modal fusion (combining tabular and imaging data) as the primary SHS differentiator for the future. Creating a single, unified prognosis metric is a critical milestone that proves the system is greater than the sum of its parts.
+* [x] **Integrated score**: Both `PRESENTATION.md` and `README.md` explicitly note multi-modal fusion (combining tabular and imaging data) as the primary SHS differentiator for the future. Creating a single, unified prognosis metric is a critical milestone that proves the system is greater than the sum of its parts.
 
 
 * [x] **Evidence-based recommended actions (real-time RAG APIs)** — DONE: `evidence_for_case` in `src/alz/explain.py` queries PubMed and ClinicalTrials.gov live and injects results into the clinical recommendation.
@@ -32,7 +32,7 @@ These capabilities represent the unique value proposition of the platform and al
 
 These features require substantial new data pipelines but will position the tool as a comprehensive suite.
 
-* **Incorporate EEG**: Replacing the current random generator placeholder in `streamlit_app.py` with a genuine EEG pipeline introduces a highly valuable diagnostic signal. This requires a new data acquisition strategy and a dedicated time-series model, making it a heavier technical lift.
+* [x]**Incorporate EEG**: Replaced the random generator placeholder in `streamlit_app.py` with a real classifier (`src/alz/eeg.py`) trained on the ds004504 dataset -- band-power features (neurokit2) into a logistic regression, mirroring the tabular model.
 
 
 
