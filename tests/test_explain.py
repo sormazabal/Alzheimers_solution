@@ -4,7 +4,7 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from alz.explain import _case_context, _parse_pubmed, _parse_trials
+from alz.explain import _case_context, _format_recommendation, _parse_pubmed, _parse_trials
 
 PATIENT = {"sex": "F", "dob": "1950-03-14", "history": "Hypertension"}
 
@@ -53,9 +53,30 @@ def test_parse_trials():
     assert parsed == [{"nct": "NCT001", "title": "Trial A", "status": "RECRUITING"}]
 
 
+def test_format_recommendation_str():
+    assert _format_recommendation("Consider a follow-up MRI.") == "Consider a follow-up MRI."
+
+
+def test_format_recommendation_list():
+    value = [
+        {"action": "Consult cardiology", "rationale": "Manage brain-heart multimorbidity."},
+        {"action": "Discuss trial enrollment", "rationale": "Patient meets recruiting criteria."},
+    ]
+    formatted = _format_recommendation(value)
+    assert "- **Consult cardiology**: Manage brain-heart multimorbidity." in formatted
+    assert "- **Discuss trial enrollment**: Patient meets recruiting criteria." in formatted
+
+
+def test_format_recommendation_fallback():
+    assert _format_recommendation({"unexpected": "shape"}) == "{'unexpected': 'shape'}"
+
+
 if __name__ == "__main__":
     test_case_context_all_missing()
     test_case_context_partial()
     test_parse_pubmed()
     test_parse_trials()
+    test_format_recommendation_str()
+    test_format_recommendation_list()
+    test_format_recommendation_fallback()
     print("ok")

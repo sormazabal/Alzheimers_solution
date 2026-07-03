@@ -2,13 +2,11 @@
 
 These features build directly on the existing architecture in `streamlit_app.py` and immediately improve the tool's usability for a clinician.
 
-* **Doctor view overall summary**: The `streamlit_app.py` file already has a placeholder for this using the `synthesize_summary` function. Upgrading this to a robust, LLM-generated synthesis of all available data points provides immediate triage value, turning raw scores into a clinical narrative.
+* [x] **Doctor view overall summary** — DONE: `synthesize_summary` in `src/alz/explain.py` now generates an LLM narrative from clinical/MRI/EEG results, wired into `app/streamlit_app.py`.
 
+* [x] **Improve MRI explainability** — DONE: Grad-CAM overlay (`gradcam_mri`) plus `explain_mri` LLM narrative in plain language, with confidence and uncertainty noted.
 
-* **Improve MRI explainability**: The current Grad-CAM implementation in `streamlit_app.py` is an excellent start. Enhancing the radiological report to explicitly describe physical characteristics (such as ventricular enlargement) and explain the confidence score in plain text will help clinicians weigh the AI's opinion appropriately and build trust.
-
-
-* **Doctor Q&A**: Expanding the existing chat interface (`chat_about_case`) into a fully robust query system allows clinicians to interrogate the patient's history. This requires solid grounding in the patient record to avoid hallucinations.
+* [x] **Doctor Q&A** — DONE: `chat_about_case` in `src/alz/explain.py` grounds replies in the patient/case context (`_case_context`), wired into the chat tab.
 
 
 
@@ -18,13 +16,13 @@ These features build directly on the existing architecture in `streamlit_app.py`
 
 These capabilities represent the unique value proposition of the platform and align with the stated goals in the documentation.
 
-* **Integrated score**: Both `PRESENTATION.md` and `README.md` explicitly note multi-modal fusion (combining tabular and imaging data) as the primary SHS differentiator for the future. Creating a single, unified prognosis metric is a critical milestone that proves the system is greater than the sum of its parts.
+* [ ] **Integrated score**: Both `PRESENTATION.md` and `README.md` explicitly note multi-modal fusion (combining tabular and imaging data) as the primary SHS differentiator for the future. Creating a single, unified prognosis metric is a critical milestone that proves the system is greater than the sum of its parts.
 
 
-* **Evidence-based recommended actions (real-time RAG APIs)**: To eliminate infrastructure overhead and ensure the most up-to-date information, the tool will query live external databases via REST APIs, parsing and injecting the results into the clinical recommendation engine.
-* **Clinical guidelines via PubMed (E-utilities API)**: Based on the patient's demographics and calculated risk level, the backend will programmatically construct queries to the PubMed ESearch API. The tool will pull the highest-ranking, recent clinical guidelines using the EFetch utility (handling the native XML/JSON conversion) to match the clinical profile.
-* **Trial mapping via ClinicalTrials.gov (v2 JSON API)**: Using the modernized v2 API endpoint (`[https://clinicaltrials.gov/api/v2/studies](https://clinicaltrials.gov/api/v2/studies)`), the system will programmatically query conditions and interventions. For example, a patient flagged with high risk could trigger a targeted call filtering for `query.cond=Alzheimer Disease` and `filter.overallStatus=RECRUITING` to match open trials. The pipeline will extract the deeply nested `protocolSection` fields (like eligibility criteria and trial sites) to present clean, actionable recruitment opportunities.
-* **Source provenance**: To guarantee clinical auditability, the RAG output must explicitly map its recommendations back to the source IDs. The interface will display clickable PMIDs (PubMed IDs) and NCT IDs (ClinicalTrials.gov unique identifiers) alongside the text so the physician can instantly verify the source.
+* [x] **Evidence-based recommended actions (real-time RAG APIs)** — DONE: `evidence_for_case` in `src/alz/explain.py` queries PubMed and ClinicalTrials.gov live and injects results into the clinical recommendation.
+* [x] **Clinical guidelines via PubMed (E-utilities API)** — DONE: implemented as part of `evidence_for_case`, results shown under "Guidelines (PubMed)" in the Overview tab.
+* [x] **Trial mapping via ClinicalTrials.gov (v2 JSON API)** — DONE: implemented as part of `evidence_for_case`, recruiting trials shown under "Recruiting trials (ClinicalTrials.gov)".
+* [x] **Source provenance** — DONE: PMIDs and NCT IDs are rendered as clickable links (`app/streamlit_app.py` evidence section).
 
 
 
@@ -53,11 +51,11 @@ Here are a few technical capabilities that would make the MVP more robust for a 
 
 ### Proposed execution roadmap
 
-| Priority | Feature | Category | Effort |
-| --- | --- | --- | --- |
-| 1 | Doctor view overall summary | Workflow | Low |
-| 2 | Improve MRI explainability | Trust | Medium |
-| 3 | Integrated multi-modal score | Core strategy | Medium |
-| 4 | Doctor Q&A | Workflow | Medium |
-| 5 | Real-time RAG (PubMed/ClinicalTrials APIs) | Decision support | High |
-| 6 | Incorporate EEG | Advanced modality | High |
+| Priority | Feature | Category | Effort | Status |
+| --- | --- | --- | --- | --- |
+| 1 | Doctor view overall summary | Workflow | Low | Done |
+| 2 | Improve MRI explainability | Trust | Medium | Done |
+| 3 | Integrated multi-modal score | Core strategy | Medium | Not started |
+| 4 | Doctor Q&A | Workflow | Medium | Done |
+| 5 | Real-time RAG (PubMed/ClinicalTrials APIs) | Decision support | High | Done |
+| 6 | Incorporate EEG | Advanced modality | High | Not started |

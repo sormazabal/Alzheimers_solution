@@ -210,6 +210,21 @@ def _recruiting_trials(condition: str, retmax: int = 3) -> list[dict]:
     return _parse_trials(resp.json())
 
 
+def _format_recommendation(value) -> str:
+    """Coerce the LLM's 'recommendation' field to text, however it's shaped.
+
+    The prompt asks for a plain string but LLMs don't always comply -- e.g. they
+    sometimes return a list of {"action", "rationale"} objects instead. Passing
+    a non-string straight to st.write() would render it as a raw JSON tree, so
+    normalize here.
+    """
+    if isinstance(value, str):
+        return value
+    if isinstance(value, list) and all(isinstance(item, dict) and "action" in item for item in value):
+        return "\n".join(f"- **{item['action']}**: {item.get('rationale', '')}" for item in value)
+    return str(value)
+
+
 def evidence_for_case(
     patient: dict, clinical_result: dict | None, mri_result: dict | None, eeg_result: dict | None
 ) -> dict:
@@ -248,7 +263,7 @@ def evidence_for_case(
                 'Respond as JSON: {"recommendation": "..."}'
             )
             response = _default_client().complete([{"role": "user", "content": prompt}])
-            recommendation = json.loads(response)["recommendation"]
+            recommendation = _format_recommendation(json.loads(response)["recommendation"])
         except Exception:
             recommendation = None
 

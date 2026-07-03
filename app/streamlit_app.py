@@ -202,10 +202,6 @@ with tab_overview:
             st.session_state.evidence = evidence_for_case(patient, result, mri_result, eeg)
     evidence = st.session_state.evidence
     if evidence:
-        if evidence["recommendation"]:
-            st.write(evidence["recommendation"])
-        else:
-            st.caption("LLM recommendation unavailable (check LLM provider configuration).")
         if evidence["pubmed"]:
             st.markdown("**Guidelines (PubMed)**")
             for a in evidence["pubmed"]:
@@ -216,6 +212,13 @@ with tab_overview:
                 st.markdown(f"- [{t['nct']}](https://clinicaltrials.gov/study/{t['nct']}) — {t['title']} ({t['status']})")
         if not evidence["pubmed"] and not evidence["trials"]:
             st.caption("No live results (check network access or API availability).")
+        if evidence["recommendation"]:
+            st.markdown("**Recommended approach**")
+            st.write(evidence["recommendation"])
+        else:
+            st.caption("LLM recommendation unavailable (check LLM provider configuration).")
+        with st.expander("Raw evidence data", expanded=False):
+            st.json(evidence)
 
     st.subheader("Ask about this case")
     st.session_state.setdefault("chat_history", [])
