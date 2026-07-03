@@ -139,3 +139,117 @@ def chat_about_case(
         return _default_client().complete(messages, system=system)
     except Exception:
         return None
+
+
+_PUBMED_BASE = "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/"
+_TRIALS_BASE = "https://clinicaltrials.gov/api/v2/studies"
+
+
+def _parse_pubmed(esummary_json: dict) -> list[dict]:
+    """Extract [{'pmid', 'title', 'source', 'pubdate'}] from an ESummary JSON payload."""
+    result = esummary_json.get("result", {})
+    return [
+        {
+            "pmid": pmid,
+            "title": result[pmid].get("title", ""),
+            "source": result[pmid].get("source", ""),
+            "pubdate": result[pmid].get("pubdate", ""),
+        }
+        for pmid in result.get("uids", [])
+    ]
+
+
+def _parse_trials(v2_json: dict) -> list[dict]:
+    """Extract [{'nct', 'title', 'status'}] from a ClinicalTrials.gov v2 studies payload."""
+    trials = []
+    for study in v2_json.get("studies", []):
+        section = study.get("protocolSection", {})
+        ident = section.get("identificationModule", {})
+        status = section.get("statusModule", {})
+        trials.append({
+            "nct": ident.get("nctId", ""),
+            "title": ident.get("briefTitle", ""),
+            "status": status.get("overallStatus", ""),
+        })
+    return trials
+
+
+def _pubmed_guidelines(query: str, retmax: int = 3) -> list[dict]:
+    """Recent PubMed articles matching 'query', via ESearch -> ESummary (both JSON, no XML)."""
+    import httpx
+
+    search = httpx.get(
+        f"{_PUBMED_BASE}esearch.fcgi",
+        params={"db": "pubmed", "term": query, "retmode": "json", "sort": "date", "retmax": retmax},
+        timeout=10,
+    )
+    search.raise_for_status()
+    pmids = search.json().get("esearchresult", {}).get("idlist", [])
+    if not pmids:
+        return []
+
+    summary = httpx.get(
+        f"{_PUBMED_BASE}esummary.fcgi",
+        params={"db": "pubmed", "id": ",".join(pmids), "retmode": "json"},
+        timeout=10,
+    )
+    summary.raise_for_status()
+    return _parse_pubmed(summary.json())
+
+
+def _recruiting_trials(condition: str, retmax: int = 3) -> list[dict]:
+    """Currently recruiting trials matching 'condition', via the ClinicalTrials.gov v2 API."""
+    import httpx
+
+    resp = httpx.get(
+        _TRIALS_BASE,
+        params={"query.cond": condition, "filter.overallStatus": "RECRUITING", "pageSize": retmax},
+        timeout=10,
+    )
+    resp.raise_for_status()
+    return _parse_trials(resp.json())
+
+
+def evidence_for_case(
+    patient: dict, clinical_result: dict | None, mri_result: dict | None, eeg_result: dict | None
+) -> dict:
+    """Live-retrieved guidelines + recruiting trials for this case, plus a grounded LLM recommendation.
+
+    Always returns {'recommendation', 'pubmed', 'trials'}; each part degrades independently
+    (empty list / None recommendation) if its network or LLM call fails, so the UI can
+    render whatever succeeded rather than an all-or-nothing failure.
+
+    ponytail: fixed "Alzheimer Disease" condition/query, no per-case query tuning -- revisit
+    if case-specific search terms (e.g. staging, comorbidities) prove valuable.
+    """
+    import json
+
+    try:
+        pubmed = _pubmed_guidelines("Alzheimer Disease AND guideline[Publication Type]")
+    except Exception:
+        pubmed = []
+
+    try:
+        trials = _recruiting_trials("Alzheimer Disease")
+    except Exception:
+        trials = []
+
+    recommendation = None
+    if pubmed or trials:
+        try:
+            sources = "\n".join(f"[PMID:{a['pmid']}] {a['title']} ({a['source']}, {a['pubdate']})" for a in pubmed)
+            sources += "\n" + "\n".join(f"[NCT:{t['nct']}] {t['title']} ({t['status']})" for t in trials)
+            prompt = (
+                f"{_case_context(patient, clinical_result, mri_result, eeg_result)}\n\n"
+                f"Available sources:\n{sources}\n\n"
+                "Recommend 2-4 concrete next actions for the clinician, citing ONLY the "
+                "sources above as [PMID:x] or [NCT:y] inline. Do not invent sources or cite "
+                "anything not listed. State these are screening aids, not diagnoses. "
+                'Respond as JSON: {"recommendation": "..."}'
+            )
+            response = _default_client().complete([{"role": "user", "content": prompt}])
+            recommendation = json.loads(response)["recommendation"]
+        except Exception:
+            recommendation = None
+
+    return {"recommendation": recommendation, "pubmed": pubmed, "trials": trials}

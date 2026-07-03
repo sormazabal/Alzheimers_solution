@@ -18,7 +18,7 @@ import streamlit as st
 
 from alz import predict
 from alz.data import FEATURE_META, load_population
-from alz.explain import chat_about_case, explain_mri, synthesize_summary
+from alz.explain import chat_about_case, evidence_for_case, explain_mri, synthesize_summary
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
 st.logo(os.path.join(os.path.dirname(__file__), "..", "TAO_logo.png"), size="large")
@@ -84,6 +84,7 @@ st.session_state.setdefault("mri_selected", None)
 st.session_state.setdefault("eeg_result", None)
 st.session_state.setdefault("mmse_history", [29, 28])  # demo prior-visit MMSE scores
 st.session_state.setdefault("notes", "")
+st.session_state.setdefault("evidence", None)
 
 """
 # :material/neurology: Alzheimer's Early-Risk Triage
@@ -194,6 +195,27 @@ with tab_overview:
         placeholder="Summarize the combined AI assessments and clinical impression here...",
         label_visibility="collapsed",
     )
+
+    st.subheader("Evidence-based suggestions")
+    if st.button(":material/menu_book: Find evidence & trials"):
+        with st.spinner("Searching PubMed and ClinicalTrials.gov..."):
+            st.session_state.evidence = evidence_for_case(patient, result, mri_result, eeg)
+    evidence = st.session_state.evidence
+    if evidence:
+        if evidence["recommendation"]:
+            st.write(evidence["recommendation"])
+        else:
+            st.caption("LLM recommendation unavailable (check LLM provider configuration).")
+        if evidence["pubmed"]:
+            st.markdown("**Guidelines (PubMed)**")
+            for a in evidence["pubmed"]:
+                st.markdown(f"- [PMID {a['pmid']}](https://pubmed.ncbi.nlm.nih.gov/{a['pmid']}/) — {a['title']} ({a['source']}, {a['pubdate']})")
+        if evidence["trials"]:
+            st.markdown("**Recruiting trials (ClinicalTrials.gov)**")
+            for t in evidence["trials"]:
+                st.markdown(f"- [{t['nct']}](https://clinicaltrials.gov/study/{t['nct']}) — {t['title']} ({t['status']})")
+        if not evidence["pubmed"] and not evidence["trials"]:
+            st.caption("No live results (check network access or API availability).")
 
     st.subheader("Ask about this case")
     st.session_state.setdefault("chat_history", [])
