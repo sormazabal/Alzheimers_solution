@@ -1,5 +1,11 @@
 # Demo Walkthrough: Clinical Triage Workflow
 
+## Use Case & End User
+
+This application is designed for **primary care physicians and neurologists** (the end users) operating in a clinical triage setting. The core use case is assessing patients presenting with early signs of cognitive decline or memory loss. Rather than immediately ordering expensive and time-consuming imaging, the clinician can use this tool to synthesize routine clinical data (demographics, MMSE) alongside optional multimodal data (MRI, EEG) to make a fast, evidence-backed decision on whether a specialist referral or further imaging is warranted.
+
+## Walkthrough
+
 This walks through one patient's visit in the Streamlit app
 ([app/streamlit_app.py](app/streamlit_app.py)) end to end, then explains why this triage
 pattern is valuable for a Siemens Healthineers integration.
@@ -43,14 +49,14 @@ ResNet18 severity classifier returns:
   than trust a bare label.
 - **AI-generated radiology-style FINDINGS** — a plain-language paragraph (from a
   vision-LLM read of the scan, or a text fallback from the Grad-CAM attention pattern)
-  describing ventricle size, atrophy, and symmetry, explicitly framed as a screening aid.
+  describing hippocampal volumes and lateral ventricle sizes, explicitly framed as a screening aid.
 
 ## Step 3 — EEG confirmation (EEG records tab)
 
 The clinician selects or uploads an EEG recording. The app extracts band-power features
 (the classic AD-associated "slowing" — more delta/theta, less alpha/beta) and shows:
 - A **signal viewer** of the raw channels.
-- A **gauge** for P(Alzheimer's pattern) with a Healthy/AD-pattern label.
+- A **gauge** for P(Alzheimer's pattern) with a Healthy/AD-pattern label. This gauge visualizes the model's confidence (from 0% to 100%) that the patient's EEG band-power features align with patterns typically associated with Alzheimer's Disease. A high percentage triggers the "Alzheimer's pattern" evaluation result, indicating significant slowing, while a lower score indicates a "Healthy pattern".
 
 ## Step 4 — Overview: the integrated picture
 
