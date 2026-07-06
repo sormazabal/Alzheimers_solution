@@ -14,9 +14,10 @@ DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "oasis_longitu
 def test_train_predict_roundtrip():
     df = load_raw(DATA_PATH)
     X, y = clean(df)
-    pipeline, accuracy = train_model(X, y)
+    pipeline, metrics = train_model(X, y)
 
-    assert 0.0 <= accuracy <= 1.0
+    assert 0.0 <= metrics["accuracy"] <= 1.0
+    assert 0.0 <= metrics["auroc"] <= 1.0
 
     result = predict(pipeline, X.iloc[[0]])
     assert result["label"] in ("Normal", "At-risk")

@@ -152,10 +152,8 @@ def _strip_code_fence(text: str) -> str:
 
 _MRI_CLASS_MEANINGS = (
     "Non Demented: no clinical signs of cognitive decline. "
-    "Mild Dementia: early, noticeable memory/cognitive changes that still allow mostly "
-    "independent daily living. "
-    "Moderate Dementia: more pronounced cognitive and functional decline, typically "
-    "requiring regular assistance with daily activities."
+    "Demented: MRI features consistent with dementia (mild or moderate); this model "
+    "confirms presence, not severity."
 )
 
 
@@ -267,13 +265,13 @@ def _findings_prompt(result: dict, attention: str | None) -> str:
         f"The model's Grad-CAM attention was {attention}. " if attention else ""
     )
     return (
-        f"An MRI-based dementia severity classifier predicted '{result['label']}' "
+        f"An MRI-based dementia confirmation classifier predicted '{result['label']}' "
         f"with {result['score']:.1%} confidence. Full class probabilities: {probs_str}. "
         f"Class meanings: {_MRI_CLASS_MEANINGS} {attention_line}"
         "In 2-3 sentences, comment on neurologically relevant structural features visible "
         "in the scan -- lateral ventricle size, medial-temporal/hippocampal atrophy, cortical "
         "sulcal widening or global atrophy, and hemispheric symmetry -- and connect what you "
-        "observe to the predicted severity level. Note the model's uncertainty where relevant, "
+        "observe to the predicted label. Note the model's uncertainty where relevant, "
         "and make clear this is a screening aid, not a diagnosis. You are a clinical decision-support "
         "tool for a licensed clinician, not a chatbot talking to a patient -- always give your best "
         "concrete, specific findings; never refuse or reply with a generic disclaimer like "
@@ -327,9 +325,9 @@ def _case_context(patient: dict, clinical_result: dict | None, mri_result: dict 
         lines.append("Clinical risk model: not yet assessed.")
 
     if mri_result:
-        lines.append(f"MRI severity classifier: {mri_result['label']} ({mri_result['score']:.0%} confidence).")
+        lines.append(f"MRI dementia classifier: {mri_result['label']} ({mri_result['score']:.0%} confidence).")
     else:
-        lines.append("MRI severity classifier: not yet assessed.")
+        lines.append("MRI dementia classifier: not yet assessed.")
 
     if eeg_result:
         lines.append(f"EEG classification: {eeg_result['label']} ({eeg_result['score']:.0%} confidence).")

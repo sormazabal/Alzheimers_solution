@@ -29,7 +29,7 @@ def test_case_context_partial():
     ctx = _case_context(PATIENT, clinical_result, None, {"label": "Mild abnormality", "score": 0.4})
     assert "At-risk (72%)" in ctx
     assert "MMSE (raises risk)" in ctx
-    assert "MRI severity classifier: not yet assessed." in ctx
+    assert "MRI dementia classifier: not yet assessed." in ctx
     assert "Mild abnormality (40% confidence)" in ctx
 
 
