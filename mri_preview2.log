@@ -1,0 +1,19 @@
+Loading full subject-grouped split (fast, no image decoding yet)...
+Split ready in 4.8s. classes=['Non Demented', 'Demented']
+Preview sizes: train=800 test=300
+  epoch 1/6 loss 0.6348 (30.9s elapsed)
+  epoch 2/6 loss 0.5076 (63.9s elapsed)
+  epoch 3/6 loss 0.4407 (121.7s elapsed)
+  epoch 4/6 loss 0.4165 (178.1s elapsed)
+  epoch 5/6 loss 0.3872 (234.9s elapsed)
+  epoch 6/6 loss 0.3693 (294.0s elapsed)
+Train pass done in 294.0s
+PRELIMINARY test metrics (small balanced subsample, subject-grouped, no leakage):
+  accuracy: 0.8066666666666666
+  balanced_accuracy: 0.8066666666666666
+  auroc: 0.9057333333333333
+  auprc: 0.8868202956113013
+  f1: 0.7835820895522388
+  sensitivity: 0.7
+  specificity: 0.9133333333333333
+  confusion_matrix: {'tn': 137, 'fp': 13, 'fn': 45, 'tp': 105}

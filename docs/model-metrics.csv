@@ -1,0 +1,5 @@
+Model,Algorithm,Accuracy,Balanced acc.,AUROC,AUPRC,F1,Sensitivity,Specificity,Eval,Data used
+Clinical,Logistic regression (9 features),0.70,0.65,0.73,0.64,0.55,0.47,0.84,"5-fold CV, out-of-fold","Synthetic oasis_longitudinal.csv (82 rows) - indicative only, not a real-world benchmark"
+MRI (Non Demented vs Demented) - preliminary,ResNet18 (frozen backbone, retrained head),0.81,0.81,0.91,0.89,0.78,0.70,0.91,"Held-out patients, 70/15/15 (small balanced subsample)","Real Kaggle imagesoasis mirror (~23k slices, ~94 subjects)"
+EEG,Logistic regression on band-power features,0.75,0.75,0.82,0.83,0.77,0.75,0.76,"5-fold CV, out-of-fold",Real ds004504 (AHEPA resting-state EEG, n=65)
+Integrated prognosis,Logarithmic opinion pool (no trained parameters),,,,,,,,Not separately benchmarked,No paired multi-modal ground truth exists to validate against (see methodology doc)

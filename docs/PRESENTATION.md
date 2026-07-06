@@ -82,7 +82,7 @@ But there's a deeper set of scientific challenges, and I want to be upfront abou
 
 The first is target leakage. The clinical dementia rating, CDR, is not a predictor of diagnosis, it is the diagnosis. The reference approach we built on trained on it anyway, which inflates accuracy on paper while producing a tool that literally cannot run before a diagnosis already exists. Removing it is the correct thing to do, but it also removes the single strongest feature, so our honest model has to work harder for a lower, more defensible number.
 
-Second, near-ceiling accuracy is a warning sign, not a win. Our current MRI classifier reports 1.00 accuracy on held-out data. For a frozen-backbone, head-only model on an imbalanced dataset, that's far more likely to reflect subject-level leakage across the train, validation, and test split, the same patient's slices showing up in more than one split, than genuine clinical-grade generalization. I'm treating that as unproven until it's verified on a subject-disjoint, external cohort.
+Second, near-ceiling accuracy is a warning sign, not a win. Our original MRI classifier reported 1.00 accuracy on held-out data, and it turned out to be exactly what it looked like: subject-level leakage, the same patient's slices showing up in more than one split. We fixed it by grouping the split by patient instead of by image, and collapsed the target to binary Non Demented vs Demented, since the Moderate Dementia class only has two subjects. The corrected model reports well below 1.00 now, which is the honest number.
 
 Third, our samples are small. The tabular model is validated on 82 synthetic visits, and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim. Both are consistent with a wide range of true performance, including meaningfully worse than the point estimate I'm showing you.
 
@@ -206,7 +206,7 @@ image slice — see the note below on why that mattered.
 | Model | Algorithm | Accuracy | Balanced acc. | AUROC | AUPRC | F1 | Sensitivity | Specificity | Eval | Data used |
 |---|---|---|---|---|---|---|---|---|---|---|
 | Clinical | Logistic regression (9 features) | 0.70 | 0.65 | 0.73 | 0.64 | 0.55 | 0.47 | 0.84 | 5-fold CV, out-of-fold | Synthetic `oasis_longitudinal.csv` (82 rows) — indicative only, not a real-world benchmark |
-| MRI (Non Demented vs Demented) | ResNet18 (frozen backbone, retrained head) | *pending* | *pending* | *pending* | *pending* | *pending* | *pending* | *pending* | Held-out **patients**, 70/15/15 | Real Kaggle `imagesoasis` mirror (~23k slices, ~94 subjects) |
+| MRI (Non Demented vs Demented) — *preliminary* | ResNet18 (frozen backbone, retrained head) | 0.81 | 0.81 | 0.91 | 0.89 | 0.78 | 0.70 | 0.91 | Held-out **patients**, 70/15/15 (small balanced subsample) | Real Kaggle `imagesoasis` mirror (~23k slices, ~94 subjects) |
 | EEG | Logistic regression on band-power features | 0.75 | 0.75 | 0.82 | 0.83 | 0.77 | 0.75 | 0.76 | 5-fold CV, out-of-fold | Real ds004504 (AHEPA resting-state EEG, n=65) |
 | Integrated prognosis | Logarithmic opinion pool (no trained parameters) | — | — | — | — | — | — | — | Not separately benchmarked | No paired multi-modal ground truth exists to validate against (see methodology doc) |
 
@@ -217,12 +217,14 @@ dozens to hundreds of near-identical adjacent slices, so the same patient's scan
 up in both train and test. The model was memorizing patients, not learning dementia
 signal. The fix is a **patient-grouped split** (every slice from one subject stays in a
 single split) plus collapsing to binary Non Demented vs Demented, since the Moderate
-Dementia folder has only 2 subjects — too few to evaluate as its own class. Retraining is
-in progress on the corrected split; this row will be updated with real, sub-1.00 numbers
-once it completes.
-Treat this as an existence proof that the pipeline trains and evaluates correctly, not as
-a validated accuracy claim; production use requires evaluation on a held-out clinical
-cohort, not the same public source distribution the model trained on.
+Dementia folder has only 2 subjects — too few to evaluate as its own class. The MRI row
+above is **preliminary**: real, non-leaked numbers, but from 6 epochs on an 800-image
+training subsample (not the full ~23k-slice dataset) so it could be produced quickly. The
+full-dataset retrain is running separately and will replace this row when it finishes.
+Treat both the preliminary and final MRI numbers as evidence the corrected pipeline
+trains and evaluates honestly, not as a validated accuracy claim; production use requires
+evaluation on a held-out clinical cohort, not the same public source distribution the
+model trained on.
 
 **Speaker notes:**
 
