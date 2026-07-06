@@ -54,7 +54,7 @@ def band_for_score(score: float) -> tuple[str, str]:
     return "Moderate Dementia", "high"
 
 
-MRI_LEVELS = {"Non Demented": "normal", "Mild Dementia": "mild", "Moderate Dementia": "high"}
+MRI_LEVELS = {"Non Demented": "normal", "Demented": "high"}
 
 def next_steps(level: str, pending: list[str]) -> str:
     """Recommendation text for a severity level, naming only assessments not yet run."""
@@ -142,9 +142,9 @@ with st.sidebar:
         st.caption("Clinical risk: not yet assessed")
     if st.session_state.mri_selected:
         mri = st.session_state.mri_selected["result"]
-        st.markdown(f"MRI severity: {chip(mri['label'], MRI_LEVELS.get(mri['label'], 'mild'))}", unsafe_allow_html=True)
+        st.markdown(f"MRI: {chip(mri['label'], MRI_LEVELS.get(mri['label'], 'high'))}", unsafe_allow_html=True)
     else:
-        st.caption("MRI severity: not yet assessed")
+        st.caption("MRI: not yet assessed")
     if st.session_state.eeg_result:
         eeg = st.session_state.eeg_result
         st.markdown(f"EEG: {chip(eeg['label'], eeg['level'])}", unsafe_allow_html=True)
@@ -213,11 +213,11 @@ with tab_overview:
 
     with cols[2]:
         with st.container(border=True):
-            st.caption("MRI severity")
+            st.caption("MRI")
             selected = st.session_state.mri_selected
             if selected:
                 mri = selected["result"]
-                st.markdown(chip(mri["label"], MRI_LEVELS.get(mri["label"], "mild")), unsafe_allow_html=True)
+                st.markdown(chip(mri["label"], MRI_LEVELS.get(mri["label"], "high")), unsafe_allow_html=True)
                 st.caption(f"Confidence: {mri['score']:.0%}")
             else:
                 st.caption("Not yet assessed")
@@ -436,17 +436,17 @@ with tab_mri:
                 result = scan["result"]
                 st.session_state.mri_selected = scan
 
-                st.metric("Predicted severity", result["label"], f"{result['score']:.0%} confidence")
+                st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
                 pending = [
                     name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
                     if not done
                 ]
-                st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'mild'), pending)}")
+                st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'high'), pending)}")
 
                 probs = result["probs"]
                 bar = go.Figure(go.Bar(
                     x=list(probs.values()), y=list(probs.keys()), orientation="h",
-                    marker_color=["#4CAF3D", "#F5E27E", "#E12A26"][: len(probs)],
+                    marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
                     text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
                 ))
                 bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
@@ -467,10 +467,8 @@ with tab_mri:
                 with st.expander("What do these categories mean?"):
                     st.markdown(
                         "- **Non Demented** — no clinical signs of cognitive decline.\n"
-                        "- **Mild Dementia** — early, noticeable memory/cognitive changes that still allow "
-                        "mostly independent daily living.\n"
-                        "- **Moderate Dementia** — more pronounced cognitive and functional decline, "
-                        "typically requiring regular assistance with daily activities."
+                        "- **Demented** — MRI features consistent with dementia (mild or moderate); "
+                        "this model confirms presence, not severity."
                     )
 
                 st.subheader("Radiology report summary")

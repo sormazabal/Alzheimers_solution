@@ -207,4 +207,4 @@ At effectively sub-cent LLM cost per patient, explainability (MRI findings, clin
 - For clinicians: every score arrives with its top reasons in plain language, plus an MRI second opinion and an EEG third opinion when needed, so a clinician is never asked to act on a number they can't interrogate.
 - For clinicians: an AI layer drafts the case summary, translates MRI findings into plain language, answers follow-up questions about the case, and pulls cited supporting evidence, so it removes the busywork around a decision without ever making the decision for them.
 - For the health system: one integration seam (`alz.predict()`) drops into any Siemens product, so this reaches clinicians through the tools they already use instead of requiring a new one.
-- Built honest on purpose: the diagnosis label (`CDR`) is barred from the model so it earns its accuracy on real pre-diagnosis signal, which is what makes it trustworthy enough to hand a clinician in the first place.
+

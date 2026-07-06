@@ -115,23 +115,26 @@ def build_pipeline():
     ])
 
 
-def train_eeg(data_dir: str, out_path: str = DEFAULT_MODEL_PATH, participants_tsv: str | None = None) -> float:
-    """Trains on all AD/CN subjects in data_dir. Returns mean stratified 5-fold CV
-    accuracy (a single 75/25 split is too noisy at n=65), then refits on all data
-    and saves the pipeline with joblib.
+def train_eeg(data_dir: str, out_path: str = DEFAULT_MODEL_PATH, participants_tsv: str | None = None) -> dict:
+    """Trains on all AD/CN subjects in data_dir. Metrics come from pooled stratified
+    5-fold out-of-fold predictions (a single 75/25 split is too noisy at n=65), then
+    refits on all data and saves the pipeline with joblib.
     """
     import joblib
-    from sklearn.model_selection import StratifiedKFold, cross_val_score
+    from sklearn.model_selection import StratifiedKFold, cross_val_predict
+
+    from alz.metrics import binary_metrics
 
     X, y, _ = build_dataset(data_dir, participants_tsv)
-    pipeline = build_pipeline()
     cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=42)
-    scores = cross_val_score(pipeline, X, y, cv=cv)
+    oof_proba = cross_val_predict(build_pipeline(), X, y, cv=cv, method="predict_proba")
+    metrics = binary_metrics(y, oof_proba[:, 1])
 
+    pipeline = build_pipeline()
     pipeline.fit(X, y)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     joblib.dump(pipeline, out_path)
-    return float(scores.mean())
+    return metrics
 
 
 @lru_cache(maxsize=None)  # ponytail: caches per model path; drop if paths change at runtime

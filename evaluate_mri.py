@@ -27,9 +27,9 @@ def main():
     )
 
     for split, m in results.items():
-        auroc = f"{m['auroc']:.3f}" if m["auroc"] is not None else "n/a"
-        auprc = f"{m['auprc']:.3f}" if m["auprc"] is not None else "n/a"
-        print(f"{split:5s} - accuracy: {m['accuracy']:.3f}  auroc: {auroc}  auprc: {auprc}")
+        print(f"{split}:")
+        for k, v in m.items():
+            print(f"  {k}: {v}")
 
     print(f"Plots saved to {args.plot_dir}")
 

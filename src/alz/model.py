@@ -9,12 +9,12 @@ import joblib
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.metrics import accuracy_score
-from sklearn.model_selection import train_test_split
+from sklearn.model_selection import StratifiedKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from alz.data import FEATURE_COLUMNS
+from alz.metrics import binary_metrics
 
 LABELS = {0: "Normal", 1: "At-risk"}
 
@@ -27,14 +27,16 @@ def build_pipeline() -> Pipeline:
     ])
 
 
-def train_model(X: pd.DataFrame, y: pd.Series, random_state: int = 42) -> tuple[Pipeline, float]:
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, train_size=0.75, random_state=random_state, stratify=y
-    )
+def train_model(X: pd.DataFrame, y: pd.Series, random_state: int = 42) -> tuple[Pipeline, dict]:
+    """Metrics come from pooled 5-fold out-of-fold predictions (n=82 is too small for a
+    single honest held-out split); the returned pipeline is then refit on all the data."""
+    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
+    oof_proba = cross_val_predict(build_pipeline(), X, y, cv=cv, method="predict_proba")
+    metrics = binary_metrics(y, oof_proba[:, 1])
+
     pipeline = build_pipeline()
-    pipeline.fit(X_train, y_train)
-    accuracy = accuracy_score(y_test, pipeline.predict(X_test))
-    return pipeline, accuracy
+    pipeline.fit(X, y)
+    return pipeline, metrics
 
 
 def save_model(pipeline: Pipeline, path: str) -> None:

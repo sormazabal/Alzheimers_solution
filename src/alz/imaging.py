@@ -45,26 +45,75 @@ def build_mri_model(num_classes: int):
     return model
 
 
+class _BinaryImageSubset:
+    """A subset of an ImageFolder's samples, relabeled to binary (0/1) targets.
+
+    Labels come from label_map (original class idx -> 0/1), not from re-reading the
+    image, so subject-level label lookups (for class-balance weighting) stay cheap.
+    """
+
+    def __init__(self, base_dataset, indices, label_map):
+        self.base = base_dataset
+        self.indices = indices
+        self.labels = [label_map[base_dataset.samples[i][1]] for i in indices]
+
+    def __len__(self):
+        return len(self.indices)
+
+    def __getitem__(self, i):
+        image, _ = self.base[self.indices[i]]
+        return image, self.labels[i]
+
+
+def _subject_of(path: str) -> str:
+    """'.../OAS1_0028_MR1_mpr-1_100.jpg' -> 'OAS1_0028' (subject id encoded in the filename)."""
+    import os
+
+    name = os.path.basename(path)
+    return "_".join(name.split("_")[:2])
+
+
 def _load_splits(data_dir: str, limit: int | None, seed: int = 42):
-    """ImageFolder dataset -> 70/15/15 train/val/test split, reused by train_mri and evaluate_mri
-    so a given (data_dir, limit) always yields the same test set a model was trained against."""
-    import torch
-    from torch.utils.data import Subset, random_split
+    """ImageFolder dataset -> binary (Non Demented vs Demented) subject-grouped 70/15/15
+    train/val/test split, reused by train_mri and evaluate_mri so a given (data_dir, limit)
+    always yields the same test set a model was trained against.
+
+    Grouped by subject (parsed from the filename) so slices from one patient can't land in
+    both train and test -- a per-slice random split leaked patients across splits and
+    produced a meaningless ~1.00 accuracy.
+    """
+    from sklearn.model_selection import train_test_split
     from torchvision.datasets import ImageFolder
 
     dataset = ImageFolder(data_dir, transform=_transform())
-    if limit is not None:
-        dataset = Subset(dataset, range(min(limit, len(dataset))))
-    classes = dataset.dataset.classes if isinstance(dataset, Subset) else dataset.classes
+    classes = ["Non Demented", "Demented"]
+    non_demented_idx = dataset.class_to_idx["Non Demented"]
+    label_map = {i: (0 if i == non_demented_idx else 1) for i in range(len(dataset.classes))}
 
-    n = len(dataset)
-    train_size = int(0.7 * n)
-    val_size = int(0.15 * n)
-    test_size = n - train_size - val_size
-    train_set, val_set, test_set = random_split(
-        dataset, [train_size, val_size, test_size],
-        generator=torch.Generator().manual_seed(seed),
+    n_total = len(dataset.samples)
+    pool = range(min(limit, n_total)) if limit is not None else range(n_total)
+
+    subjects: dict[str, list[int]] = {}
+    for i in pool:
+        path, _ = dataset.samples[i]
+        subjects.setdefault(_subject_of(path), []).append(i)
+
+    subject_ids = list(subjects.keys())
+    subject_labels = [label_map[dataset.samples[subjects[s][0]][1]] for s in subject_ids]
+
+    train_subs, temp_subs, train_y, temp_y = train_test_split(
+        subject_ids, subject_labels, train_size=0.7, random_state=seed, stratify=subject_labels
     )
+    val_subs, test_subs, _, _ = train_test_split(
+        temp_subs, temp_y, train_size=0.5, random_state=seed, stratify=temp_y
+    )
+
+    def _indices_for(subs):
+        return [i for s in subs for i in subjects[s]]
+
+    train_set = _BinaryImageSubset(dataset, _indices_for(train_subs), label_map)
+    val_set = _BinaryImageSubset(dataset, _indices_for(val_subs), label_map)
+    test_set = _BinaryImageSubset(dataset, _indices_for(test_subs), label_map)
     return train_set, val_set, test_set, classes
 
 
@@ -86,33 +135,19 @@ def _predict_probs(model, loader, device):
 
 
 def _metrics(y_true, y_prob, classes) -> dict:
-    """{'accuracy', 'auroc', 'auprc'}; auroc/auprc are None when not computable (e.g. a split
-    with only one class present, which happens with tiny/synthetic datasets)."""
-    from sklearn.metrics import accuracy_score, average_precision_score, roc_auc_score
+    """Binary classifier only (Non Demented vs Demented) -- full clinical metric set via
+    alz.metrics.binary_metrics, keyed on P(Demented) = y_prob[:, 1]."""
+    from alz.metrics import binary_metrics
 
     if len(y_true) == 0:
-        return {"accuracy": 0.0, "auroc": None, "auprc": None}
-
-    accuracy = accuracy_score(y_true, y_prob.argmax(1))
-    try:
-        if len(classes) == 2:
-            score = y_prob[:, 1]
-            auroc = roc_auc_score(y_true, score)
-            auprc = average_precision_score(y_true, score)
-        else:
-            from sklearn.preprocessing import label_binarize
-
-            auroc = roc_auc_score(y_true, y_prob, multi_class="ovr", average="macro")
-            y_bin = label_binarize(y_true, classes=range(len(classes)))
-            auprc = average_precision_score(y_bin, y_prob, average="macro")
-    except ValueError:
-        auroc = auprc = None
-
-    return {"accuracy": accuracy, "auroc": auroc, "auprc": auprc}
+        return {"accuracy": 0.0, "balanced_accuracy": 0.0, "auroc": None, "auprc": None,
+                "f1": 0.0, "sensitivity": None, "specificity": None,
+                "confusion_matrix": {"tn": 0, "fp": 0, "fn": 0, "tp": 0}}
+    return binary_metrics(y_true, y_prob[:, 1])
 
 
 def _fmt_metric(value) -> str:
-    return f"{value:.3f}" if value is not None else "n/a"
+    return f"{value:.3f}" if isinstance(value, float) else str(value)
 
 
 def train_mri(
@@ -121,12 +156,15 @@ def train_mri(
     epochs: int = 3,
     limit: int | None = None,
     device: str | None = None,
-) -> float:
-    """Train on an ImageFolder-structured directory of class folders. Returns held-out test accuracy."""
+) -> dict:
+    """Train on an ImageFolder-structured directory of class folders (binary: Non Demented
+    vs Demented, subject-grouped split). Returns the held-out test metric set."""
     import os
 
     import torch
     from torch.utils.data import DataLoader
+
+    from alz.metrics import save_metrics
 
     device = _device(device)
     train_set, val_set, test_set, classes = _load_splits(data_dir, limit)
@@ -134,14 +172,9 @@ def train_mri(
     val_loader = DataLoader(val_set, batch_size=32)
     test_loader = DataLoader(test_set, batch_size=32)
 
-    # Inverse-frequency class weights for the imbalanced OASIS severity classes.
+    # Inverse-frequency class weights for the imbalanced Non Demented / Demented split.
     # ponytail: inverse-freq class weights; add sampler/augmentation if minority recall stalls.
-    full_dataset = train_set.dataset
-    if hasattr(full_dataset, "dataset"):
-        targets = [full_dataset.dataset.targets[i] for i in full_dataset.indices]
-    else:
-        targets = full_dataset.targets
-    counts = torch.bincount(torch.tensor(targets), minlength=len(classes)).float()
+    counts = torch.bincount(torch.tensor(train_set.labels), minlength=len(classes)).float()
     weights = (1.0 / counts.clamp(min=1)).to(device)
 
     model = build_mri_model(len(classes)).to(device)
@@ -176,15 +209,14 @@ def train_mri(
 
     model.eval()
     test_metrics = _metrics(*_predict_probs(model, test_loader, device), classes)
-    print(
-        f"Test - acc: {test_metrics['accuracy']:.3f} - "
-        f"auroc: {_fmt_metric(test_metrics['auroc'])} - "
-        f"auprc: {_fmt_metric(test_metrics['auprc'])}"
-    )
+    print("Test metrics (held-out subjects):")
+    for k, v in test_metrics.items():
+        print(f"  {k}: {v}")
 
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     torch.save({"state_dict": model.state_dict(), "classes": classes}, out_path)
-    return test_metrics["accuracy"]
+    save_metrics("mri", test_metrics)
+    return test_metrics
 
 
 def evaluate_mri(
@@ -194,9 +226,12 @@ def evaluate_mri(
     limit: int | None = None,
     plot_dir: str | None = None,
 ) -> dict:
-    """Report accuracy/AUROC/AUPRC on the train/val/test splits of a trained model, and
-    optionally save ROC/PR curve plots (from the test split) to plot_dir."""
+    """Report the full binary metric set on the train/val/test splits of a trained model,
+    save results/mri_metrics.json (test split), and optionally save ROC/PR curve plots
+    (from the test split) to plot_dir."""
     from torch.utils.data import DataLoader
+
+    from alz.metrics import save_metrics
 
     device = _device(device)
     train_set, val_set, test_set, classes = _load_splits(data_dir, limit)
@@ -211,6 +246,7 @@ def evaluate_mri(
         predictions[name] = (y_true, y_prob)
         results[name] = _metrics(y_true, y_prob, classes)
 
+    save_metrics("mri", results["test"])
     if plot_dir is not None:
         _plot_curves(*predictions["test"], classes, plot_dir)
 
@@ -277,7 +313,8 @@ def _load_mri_model(model_path: str, device: str):
 
 
 def predict_mri_probs(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
-    """Full severity distribution: {'probs': {class_label: float, ...}, 'label': str, 'score': float}.
+    """Binary dementia confirmation: {'probs': {'Non Demented': float, 'Demented': float},
+    'label': str, 'score': float}.
 
     'path' may be a filesystem path or any file-like object PIL.Image.open accepts
     (e.g. a Streamlit UploadedFile).
@@ -304,8 +341,7 @@ def predict_mri_probs(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
 def predict_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     """Same return shape as model.predict(): {'score': float, 'label': str}.
 
-    'label' is the predicted severity class (Non Demented / Very mild / Mild / Moderate
-    Dementia); 'score' is the model's confidence in that class.
+    'label' is 'Non Demented' or 'Demented'; 'score' is the model's confidence in that label.
     """
     result = predict_mri_probs(path, model_path)
     return {"score": result["score"], "label": result["label"]}

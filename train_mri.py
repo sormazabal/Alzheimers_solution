@@ -22,11 +22,8 @@ def main():
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
 
-    accuracy = train_mri(
-        args.data, out_path=args.out, epochs=args.epochs, limit=args.limit, device=args.device
-    )
+    train_mri(args.data, out_path=args.out, epochs=args.epochs, limit=args.limit, device=args.device)
 
-    print(f"Trained on data from {args.data}, held-out accuracy: {accuracy:.2f}")
     print(f"Model saved to {args.out}")
 
 

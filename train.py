@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "src"))
 
 from alz.data import clean, load_raw
+from alz.metrics import save_metrics
 from alz.model import save_model, train_model
 
 DEFAULT_DATA = os.path.join(os.path.dirname(__file__), "data", "oasis_longitudinal.csv")
@@ -21,12 +22,15 @@ def main():
 
     df = load_raw(args.data)
     X, y = clean(df)
-    pipeline, accuracy = train_model(X, y)
+    pipeline, metrics = train_model(X, y)
 
     os.makedirs(os.path.dirname(args.out), exist_ok=True)
     save_model(pipeline, args.out)
+    save_metrics("clinical", metrics)
 
-    print(f"Trained on {len(X)} rows, held-out accuracy: {accuracy:.2f}")
+    print(f"Trained on {len(X)} rows (5-fold CV, out-of-fold metrics):")
+    for k, v in metrics.items():
+        print(f"  {k}: {v}")
     print(f"Model saved to {args.out}")
 
 
