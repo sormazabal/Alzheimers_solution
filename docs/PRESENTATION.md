@@ -105,7 +105,9 @@ And finally, population mismatch. OASIS and the AHEPA EEG cohort are specific, p
 
 **Speaker notes:**
 
-"So given all of that, here's what we actually built. The one-line pitch is: a single, honest risk score today, confirmed by imaging and EEG when needed, explained in plain language, reachable from anywhere with one function call.
+""
+
+## Slide 6: Architecture detailsSo given all of that, here's what we actually built. The one-line pitch is: a single, honest risk score today, confirmed by imaging and EEG when needed, explained in plain language, reachable from anywhere with one function call.
 
 It's effortless to integrate. One seam, alz dot predict, is used identically by the clinician-facing app, the REST API, and every automated test. Any Siemens system plugs in without custom glue code.
 
@@ -119,9 +121,7 @@ We also get a third, independent signal from EEG. It's a low-cost, already-colle
 
 And critically, this isn't three conflicting numbers. Clinical, MRI, and EEG signals are fused into a single prognosis that automatically leans on whichever modality is most confident. That's the differentiator the client asked for, and it's delivered, not a roadmap item.
 
-Finally, there's an AI layer that does the busywork a clinician shouldn't have to do themselves: an automatic case summary, plain-language MRI findings, free-form question and answer on the case, and live pulls from PubMed and ClinicalTrials.gov with citations. All of that is optional, and all of it is fail-safe, meaning if the AI call fails, the tool degrades gracefully instead of breaking."
-
-## Slide 6: Architecture details
+Finally, there's an AI layer that does the busywork a clinician shouldn't have to do themselves: an automatic case summary, plain-language MRI findings, free-form question and answer on the case, and live pulls from PubMed and ClinicalTrials.gov with citations. All of that is optional, and all of it is fail-safe, meaning if the AI call fails, the tool degrades gracefully instead of breaking.
 **Layer 1 — User interface and interaction:**
 - Streamlit clinical workstation ([app/streamlit_app.py](app/streamlit_app.py)) — 4 tabs: **Clinical risk** (patient form → score + drivers), **MRI records** (scan upload → severity + Grad-CAM + AI findings), **EEG records** (recording → band-power classification + signal viewer), **Overview** (integrated prognosis, AI case summary, live evidence, case chat).
 - FastAPI service ([app/api.py](app/api.py)) — `POST /predict` (Pydantic-validated `PatientRecord`) and `GET /health`.
@@ -238,7 +238,7 @@ For EEG, a resting-state recording gets turned into relative band power, delta, 
 
 Now, the part I want to spend the most time on: how we fuse these into one prognosis. Each modality's probability gets converted to log-odds, averaged with equal weight by default, and converted back with a sigmoid. The intuition is this: a modality sitting near 0.5, meaning it's uncertain, has a log-odds near zero, so it barely moves the fused result. A confident modality, with a probability near 0 or near 1, pulls the fused score strongly toward it. So a stronger signal dominates a weaker one automatically, without any hand-picked weighting.
 
-Now the metrics table. Clinical logistic regression gets 0.76 held-out accuracy on a stratified 75-25 split, but that's on 82 rows of synthetic data, so treat it as indicative, not a real-world benchmark. The MRI model reports 1.00 accuracy across train, validation, and test. I want to say this as clearly as I can: that number is an existence proof that the pipeline trains and evaluates correctly. It is not a validated clinical accuracy claim. For this class-imbalanced dataset with a frozen-backbone, head-only model, that number is more likely explained by subject-level leakage than genuine generalization, and AUROC and AUPRC report not-applicable because sklearn can't compute those curves for a class with no predicted negatives. The EEG model gets 0.75 mean accuracy across five-fold cross-validation on 65 real recordings. And the integrated prognosis has not been separately benchmarked, because we don't have a dataset with all three modalities on the same patients yet."
+Now the metrics table. Clinical logistic regression gets 0.76 held-out accuracy on a stratified 75-25 split, but that's on 82 rows of synthetic data, so treat it as indicative, not a real-world benchmark. The MRI model reports 1.00 accuracy across train, validation, and test. I want to say this as clearly as I can: that number is an existence proof that the pipeline trains and evaluates correctly. For this class-imbalanced dataset with a frozen-backbone, head-only model, that number is more likely explained by subject-level leakage than genuine generalization, and AUROC and AUPRC report not-applicable because sklearn can't compute those curves for a class with no predicted negatives. The EEG model gets 0.75 mean accuracy across five-fold cross-validation on 65 real recordings. And the integrated prognosis has not been separately benchmarked, because we don't have a dataset with all three modalities on the same patients yet."
 
 ## Slide 7: Dataset overview
 
@@ -324,7 +324,7 @@ At effectively sub-cent LLM cost per patient, explainability (MRI findings, clin
 
 **Speaker notes:**
 
-"Let's talk about cost, because I know that's on people's minds whenever AI gets mentioned. There's no billing dashboard wired up in the repo, so these are estimates, but they're grounded: published per-token rates for the two hosted APIs we actually call, sized against the real prompt and response lengths in the code. Everything else, model training, PubMed and ClinicalTrials.gov lookups, is free and local.
+"Let's talk about cost, because I know that's on people's minds whenever AI gets mentioned.  Everything else, model training, PubMed and ClinicalTrials.gov lookups, is free and local.
 
 The MRI vision findings call, through HuggingFace to Gemma 3, costs about six hundredths of a cent. The clinical summary, through Groq's Llama 3.1 8B, costs about three thousandths of a cent. Evidence and recommendations, same model, grounded on live PubMed and ClinicalTrials.gov results, costs about five thousandths of a cent. The literature retrieval itself is free, and model training is a one-time local compute cost, not a per-patient cost.
 
@@ -368,7 +368,7 @@ For patients, risk surfaces from data already in their chart, days before anyone
 
 For clinicians, every score arrives with its top reasons in plain language, plus an MRI second opinion and an EEG third opinion when needed. A clinician is never asked to act on a number they can't interrogate. And the AI layer drafts the case summary, translates MRI findings into plain language, answers follow-up questions about the case, and pulls cited supporting evidence, removing the busywork around a decision without ever making that decision for them.
 
-And for the health system, one integration seam, alz dot predict, drops into any Siemens product. That's not a minor engineering detail, it's the single technical fact that makes every other promise on this slide deliverable. This reaches clinicians through the tools they already use, instead of asking them to adopt a new one.
+
 
 Thank you. I'm happy to take questions."
 
