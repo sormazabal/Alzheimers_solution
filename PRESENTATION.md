@@ -174,7 +174,21 @@ No numeric benchmark results are committed to the repo (models train from data a
 **Test coverage:** `tests/test_smoke.py` (tabular roundtrip), `tests/test_api.py` (FastAPI `/predict` + `/health`), `tests/test_imaging.py` (MRI train→predict→evaluate roundtrip on a synthetic dataset, skips if imaging deps absent).
 
 ## Slide 10: Cost analysis
-Information not available in the current repository. No infrastructure, API-billing, or compute-cost documentation exists. Observations from the code: no paid LLM/cloud APIs are called; both models train locally (tabular is trivial; ResNet18 head-only fine-tune runs on CPU, uses GPU automatically when available), so runtime cost is local compute only.
+No billing dashboard is wired up in the repo, so these are estimates: published per-token rates for the two hosted APIs the prototype actually calls, sized against the real prompt/response lengths in `src/alz/explain.py`. Everything else (model training, PubMed/ClinicalTrials.gov lookups) is free/local.
+
+| Component | Cost per patient | Detail |
+| --- | --- | --- |
+| MRI vision findings (HuggingFace Inference Providers, `google/gemma-3-27b-it`, no HF markup) | ~$0.00006 | ~300 prompt tokens + 1 image (256 tokens/crop, Gemma 3's fixed vision-encoder output) + ~120 output tokens; `explain._vision_findings`, gated on `HF_TOKEN` |
+| Clinical summary (Groq, `llama-3.1-8b-instant`) | ~$0.00003 | ~400 input / ~150 output tokens; `synthesize_summary` |
+| Evidence & recommendations (Groq, `llama-3.1-8b-instant`) | ~$0.00005 | ~700 input / ~200 output tokens; `evidence_for_case`, grounded on live PubMed/ClinicalTrials.gov results |
+| PubMed / ClinicalTrials.gov retrieval | $0.00 | Free public APIs (`esearch`/`esummary`, ClinicalTrials.gov v2) |
+| Model training (tabular + MRI) | $0.00 (compute only) | Local CPU/GPU, one-time, not per-patient |
+
+**Total LLM inference cost: ~$0.00014 per patient case** (published rates × actual prompt/response sizes: Groq $0.05/$0.08 per 1M in/out tokens, HF-routed Gemma 3 27B $0.08/$0.16 per 1M in/out tokens). Negligible next to the cost of the imaging studies this tool is meant to help avoid ordering unnecessarily. Text-completion provider is swappable (`llm.py` also supports Anthropic, OpenAI, Gemini, Bedrock, local Ollama); Groq was chosen here for its low per-token rate. A larger/non-square MRI slice could trigger Gemma 3's pan-and-scan mode (multiple 256-token crops), but even a handful of extra crops only adds a few hundredths of a cent. Costs scale linearly with patient volume and would shift if a pricier provider or model is swapped in.
+
+### Expected results and impact
+
+At effectively sub-cent LLM cost per patient, explainability (MRI findings, clinical summary, cited evidence) is essentially free to attach to every screening case. The real cost lever is imaging *volume*, which this tool is designed to reduce by triaging who actually needs an MRI.
 
 ## Slide 11: Roadmap and next steps
 **Completed milestones (from TODO.md):**
@@ -189,7 +203,8 @@ Information not available in the current repository. No infrastructure, API-bill
 - Swap synthetic CSV for real OASIS-2 data; train imaging model on real OASIS slices for real metrics.
 
 ## Slide 12: Conclusion and key takeaways
-- Turns routine clinical data into an explainable early-risk signal *before* costly imaging — directly attacking the client's imaging-cost and late-detection pains.
-- One `alz.predict()` seam makes integration across Siemens systems trivial; Streamlit, REST API, and tests all reuse it.
-- Honest-by-design: logistic-regression coefficients drive the explanation, and `CDR` is excluded to avoid leaking the diagnosis into a pre-diagnosis screener.
-- Scaffolded, not overbuilt: phase-2 MRI confirmation is implemented and the fusion differentiator has a clear path, while auth/Docker/registry/CI are consciously deferred to keep the MVP honest about what's proven.
+- For patients: risk surfaces from data already in their chart, days before anyone books a scan, so the patients who need imaging get it sooner and the ones who don't are spared the cost, wait, and anxiety of an unnecessary MRI.
+- For clinicians: every score arrives with its top reasons in plain language, plus an MRI second opinion and an EEG third opinion when needed, so a clinician is never asked to act on a number they can't interrogate.
+- For clinicians: an AI layer drafts the case summary, translates MRI findings into plain language, answers follow-up questions about the case, and pulls cited supporting evidence, so it removes the busywork around a decision without ever making the decision for them.
+- For the health system: one integration seam (`alz.predict()`) drops into any Siemens product, so this reaches clinicians through the tools they already use instead of requiring a new one.
+- Built honest on purpose: the diagnosis label (`CDR`) is barred from the model so it earns its accuracy on real pre-diagnosis signal, which is what makes it trustworthy enough to hand a clinician in the first place.

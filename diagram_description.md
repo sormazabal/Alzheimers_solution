@@ -13,8 +13,6 @@ Create a clean, professional infographic-style architecture diagram, widescreen 
 **Panel 1 — USER INPUT / INTERFACE**
 - Icon: a simple monitor/dashboard icon
 - Text blocks: "Streamlit Clinical Workstation — 4 tabs: Clinical Risk, MRI Records, EEG Records, Overview"
-- "FastAPI service — POST /predict, GET /health"
-- "CLIs: train.py, train_mri.py, evaluate_mri.py"
 - Arrow points right into Panel 2, 3, and 4 (fan-out, since input feeds all three models)
 
 **Panel 2 — CLINICAL RISK MODEL**
