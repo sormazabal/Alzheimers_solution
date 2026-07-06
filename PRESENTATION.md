@@ -1,4 +1,4 @@
-# Alzheimer's Early-Risk MVP
+# Alzheimer's Early-Risk Triage
 
 **Subtitle:** A modular Alzheimer's-risk pipeline that scores patients from routine clinical data today and scales to MRI confirmation later — all behind one integration seam any system can call.
 **Presenter:** Zow ORmazabal
@@ -14,34 +14,48 @@
 - Conclusion
 
 ## Slide 3: Project overview and client value
-**Overview:** A proof-of-capability screening pipeline for Siemens Digital Health / SHS AI. It takes cognitive scores + demographics and returns an Alzheimer's risk score with the top contributing factors, *before* imaging is ordered. MRI-based severity classification and EEG-based confirmation each add an independent signal, fused into one integrated prognosis, with an LLM decision-support layer (doctor summary, grounded Q&A, live evidence retrieval) on top.
-**Key objective:** Flag at-risk patients early from data clinics already collect, so imaging and specialist time are spent where they matter — then let clinicians confirm and act on that signal without leaving the tool.
-**Client value:** Triage before imaging = fewer unnecessary scans and lower cost per screened patient; an honest, coefficient-based explanation per prediction (plus Grad-CAM for MRI) supports clinical trust; one function-call seam (`alz.predict`) means any Siemens system (UI, API, notebook) integrates without bespoke glue. Multi-modal fusion — the stated SHS differentiator — is implemented, not aspirational.
-**Status:** MVP+. Tabular risk, MRI severity, and EEG classification are each built and tested; a logarithmic-opinion-pool fusion combines whichever are available into one score; an LLM layer adds doctor-facing summaries, MRI narratives, case Q&A, and live PubMed/ClinicalTrials.gov evidence. Auth, Docker, model registry, CI, and real EHR integration deliberately deferred.
+**The pitch:** Every unnecessary MRI or PET scan is money and scanner time the client can't get back, and every Alzheimer's case caught late is a patient the health system could have helped sooner. This product closes that gap: it scores Alzheimer's risk from data the clinic already has on file, days before anyone books a scan, and hands the clinician a second and third opinion (MRI, EEG) plus an AI-drafted case summary the moment those results come in.
+
+**Why now:** Alzheimer's diagnosis today is imaging-first and symptom-triggered — expensive, slow, and reactive. This flips the order: cheap data in, risk score out, imaging reserved for the patients who actually need it.
+
+**What the client gets:**
+
+- **Lower cost per diagnosis** — imaging ordered by evidence, not by default, cutting unnecessary scans and freeing scanner capacity for patients who need it.
+- **Earlier intervention** — risk surfaces from data already sitting in the chart, before symptoms force the issue.
+- **A tool clinicians will actually trust** — every score comes with a plain "why," not a black-box number; every LLM claim is grounded in the patient's own record and cited literature.
+- **Zero integration friction** — one call, `alz.predict()`, drops into any Siemens product (UI, API, notebook) with no bespoke glue code.
+- **The differentiator the client asked for, delivered** — multi-modal fusion of clinical, MRI, and EEG signal into a single prognosis is built and working today, not a roadmap promise.
+
+**Status:** MVP+ — working end to end. Clinical risk scoring, MRI severity confirmation, and EEG confirmation are each built and tested; a fusion layer combines whichever are available into one prognosis; an AI decision-support layer generates doctor-facing summaries and pulls live supporting evidence. Production-hardening items (auth, deployment, CI, live EHR feed) are the known, scoped remainder — not open questions.
 **Category:** Clinical / digital-health machine learning.
 
 ## Slide 4: Client pains and system challenges
 **Client pain points:**
-- Imaging (MRI/PET) is expensive and capacity-limited — ordering it without prior triage wastes budget and scanner time.
-- Alzheimer's risk is often assessed late, after symptoms; earlier signals in routine data go unused.
-- Black-box risk tools are hard to trust clinically and hard to integrate across a vendor's product line.
 
-**Systemic challenges:**
-- Cognitive scores + demographics are collected but not systematically turned into a risk signal.
-- Real datasets (OASIS-2, imaging) carry data-use terms / need agreements, slowing prototyping.
-- A naive model can leak the diagnosis: the vendor reference keeps `CDR` (the clinical dementia rating) as a predictor — but CDR *is* the diagnosis, so a pre-diagnosis screening tool must exclude it.
-- Imaging references assume 3D NIfTI volumes (MONAI/TorchIO/MedicalNet); the publicly available OASIS Kaggle mirror ships 2D JPEG slices, so that pipeline doesn't transfer directly.
+- Imaging is the most expensive, most capacity-constrained step in the diagnostic path, every scan ordered without prior evidence is a scan that could have gone to a higher-priority patient.
+- Diagnosis usually happens after symptoms are already visible. The data that could have flagged risk earlier is sitting unused in the chart.
+- Existing risk tools are black boxes, which makes clinicians reluctant to act on them and makes them hard to certify and integrate across a product line.
+
+**Why this is harder than "just train a model" — the scientific challenges:**
+
+- **Target leakage:** the clinical dementia rating (CDR) is not a predictor of diagnosis, it *is* the diagnosis. The reference approach trained on it anyway, which inflates accuracy on paper while producing a tool that cannot run before a diagnosis exists. Removing it is correct, but it also removes the single strongest feature, so the honest model has to work harder for a lower, more defensible number.
+- **Near-ceiling accuracy is a warning sign, not a win:** the current MRI classifier reports 1.00 accuracy on held-out data. For a frozen-backbone, head-only model on an imbalanced dataset, that is far more likely to reflect subject-level leakage across the train/val/test split (the same patient's slices appearing in more than one split) or a distribution too easy to be representative, than genuine clinical-grade generalization. This has to be treated as unproven until verified on a subject-disjoint, external cohort.
+- **Small, synthetic, or narrow samples:** the tabular model is validated on 82 synthetic visits and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim; both are consistent with a wide range of true performance, including much worse than the point estimate shown.
+- **No paired ground truth for fusion:** the log-opinion-pool fusion combines clinical, MRI, and EEG scores mathematically, but no dataset in hand has all three modalities on the same patients. The fusion logic is sound, but its output has never been checked against a real, jointly-labeled case — it is unvalidated as a combined predictor, independent of how well each modality performs alone.
+- **Explanation is not causation:** `top_drivers()` reports which features moved *this model's* score, not which factors cause Alzheimer's risk in the patient. Presenting coefficient weight as a clinical "reason" without that caveat risks overstating what the tool actually knows.
+- **Population mismatch:** OASIS (tabular and imaging) and the AHEPA EEG cohort are specific, public research populations, not necessarily representative of the client's own patient demographics. A model earns its numbers on one distribution and has not yet been asked to generalize to another.
+
 
 ## Slide 5: Proposed solution
-- **One integration seam:** every caller uses `from alz import predict`; a dict in → `{score, label, drivers}` out. Streamlit demo, FastAPI service, and tests all hit the same function.
-- **Tabular risk model:** sklearn `Pipeline(impute → scale → LogisticRegression)`. Logistic regression chosen over the reference RandomForest so coefficients give a direct, honest explanation.
-- **Built-in explainability:** `explain.top_drivers()` ranks features by `scaled_value × coefficient` — top-3 "raises/lowers risk" factors, no SHAP dependency.
-- **Leakage guard:** `CDR` dropped as a predictor by design (documented in `data.py`).
-- **MRI confirmation:** ImageNet-pretrained ResNet18, frozen backbone + retrained head, severity classification (Non Demented / Mild / Moderate Dementia); inverse-frequency class weights for imbalance; Grad-CAM overlay shows which scan regions drove the prediction; runs on CPU, uses GPU when present.
-- **EEG confirmation:** relative band-power features (delta–gamma + theta/alpha and slowing ratios, the textbook AD-EEG signature) into a `StandardScaler + LogisticRegression(class_weight="balanced")` pipeline — same explainable shape as the tabular model, sized for the small (n≈65) labeled EEG dataset available.
-- **Integrated prognosis:** `fusion.integrated_score()` combines whichever modalities are available (clinical, MRI, EEG) via a **logarithmic opinion pool** — a weighted average in log-odds space, so a confident modality naturally dominates an uncertain one without hand-tuned weights (see `docs/fusion-methodology.md`).
-- **LLM decision-support layer** (`explain.py`): doctor-facing case summary (`synthesize_summary`), plain-language MRI findings grounded in the scan + Grad-CAM (`explain_mri`), free-form case Q&A (`chat_about_case`), and live evidence retrieval — PubMed guidelines + ClinicalTrials.gov recruiting trials with clickable PMID/NCT provenance, feeding a citation-grounded recommendation (`evidence_for_case`). Every LLM call degrades to `None`/empty on failure rather than breaking the UI.
-- **Thin service layer:** FastAPI `/predict` + `/health` wrapping the same seam; `load_model` is `@lru_cache`'d so the model loads once per process.
+**The one-line pitch:** a single, honest risk score today, confirmed by imaging and EEG when needed, explained in plain language, reachable from anywhere with one function call.
+
+- **Effortless to integrate:** one seam, `alz.predict()`, used identically by the clinician-facing app, the REST API, and every automated test — any Siemens system plugs in without custom glue.
+- **Trustworthy by construction:** every risk score ships with its top 3 reasons in plain language ("raises/lowers risk"), because a number clinicians can't interrogate is a number they won't act on.
+- **No diagnosis leakage:** the model is barred from ever seeing the clinical dementia rating, so it earns its accuracy on real pre-diagnosis signal instead of cheating off the answer.
+- **A second opinion from imaging:** when a scan exists, the system classifies dementia severity from the MRI itself and highlights the exact regions that drove the call — confirmation a clinician can visually check, not just take on faith.
+- **A third, independent signal from EEG:** a low-cost, already-collected recording adds a further, independent read on Alzheimer's-pattern brain activity — another vote before anyone commits to expensive imaging.
+- **One prognosis, not three conflicting numbers:** clinical, MRI, and EEG signals are fused into a single score that automatically leans on whichever modality is most confident — the differentiator the client asked for, delivered.
+- **An AI layer that does the busywork a clinician shouldn't have to:** an automatic case summary, plain-language MRI findings, free-form Q&A on the case, and live pulls from PubMed and ClinicalTrials.gov with citations — all optional, all fail-safe (it degrades gracefully rather than breaking the tool if the AI call fails).
 
 ## Slide 6: Architecture details
 **Layer 1 — User interface and interaction:**

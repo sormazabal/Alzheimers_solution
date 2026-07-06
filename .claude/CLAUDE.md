@@ -1,0 +1,1 @@
+1. AVOID em dashes, never use them for writing. Also, don't replace them using "-" or ""--".
