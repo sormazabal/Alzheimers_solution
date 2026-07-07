@@ -67,3 +67,10 @@ Deferred, with trigger and upgrade path (each gets a `ponytail:` comment at its 
 - TODO-5 — Imaging reliability re-weighting. The fusion reliability knob for the MRI
   modality stays at default 1.0. Skipped: no paired 3D validation data to tune it. Add when
   such data exists (temperature-scaling hook already noted in `docs/fusion-methodology.md`).
+- TODO-6 — DirectML backend. Wired up in `_device()` (`src/alz/imaging.py`) for this
+  machine's Intel Xe-LP iGPU (Raptor Lake-P, no CUDA GPU present) via `torch-directml`,
+  which requires pinning `torch==2.4.1`/`torchvision==0.19.1` in
+  `requirements-imaging.txt` (it lags mainline releases). Intel XPU/IPEX was not wired
+  up: its officially supported client GPUs are Arc and Core-Ultra/Meteor-Lake-or-later,
+  not this Xe-LP generation. Open risk: `gradcam_mri`'s backward-hook path hasn't been
+  verified against DirectML's autograd op coverage -- pass `--device cpu` if it misbehaves.

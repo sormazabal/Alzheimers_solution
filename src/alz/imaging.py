@@ -17,10 +17,24 @@ _IMAGENET_MEAN = [0.485, 0.456, 0.406]
 _IMAGENET_STD = [0.229, 0.224, 0.225]
 
 
-def _device(device: str | None = None) -> str:
+def _device(device: str | None = None):
     import torch
 
-    return device or ("cuda" if torch.cuda.is_available() else "cpu")
+    if device:
+        return device
+    if torch.cuda.is_available():
+        return "cuda"
+    try:
+        import torch_directml
+
+        if torch_directml.is_available():
+            # ponytail: torch-directml pins torch==2.4.1/torchvision==0.19.1 (see
+            # requirements-imaging.txt) -- it lags mainline releases; re-check the pin
+            # if this stops importing after a torch upgrade.
+            return torch_directml.device()
+    except ImportError:
+        pass
+    return "cpu"
 
 
 def _transform():
