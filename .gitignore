@@ -6,6 +6,7 @@ models/*.joblib
 models/*.pt
 .pytest_cache/
 .env
+data/
 data/imagesoasis
 data\ds004504
 data/ds004504
