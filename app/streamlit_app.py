@@ -96,6 +96,8 @@ if "patient" not in st.session_state:
 st.session_state.setdefault("clinical_result", None)
 st.session_state.setdefault("clinical_record", None)
 st.session_state.setdefault("mri_selected", None)
+st.session_state.setdefault("mri_2d_result", None)
+st.session_state.setdefault("mri_3d_result", None)
 st.session_state.setdefault("eeg_result", None)
 st.session_state.setdefault("mmse_history", [29, 28])  # demo prior-visit MMSE scores
 st.session_state.setdefault("notes", "")
@@ -480,6 +482,8 @@ def _run_mri_2d(image_bytes: bytes, image_name: str):
         except Exception:
             st.info("Heatmap unavailable for this image.")
 
+    st.session_state.mri_2d_result = {"result": result, "cam": (cam or {}).get("cam")}
+
     with st.expander("What do these categories mean?"):
         st.markdown(
             "- **Non Demented** — no clinical signs of cognitive decline.\n"
@@ -501,7 +505,7 @@ def _run_mri_2d(image_bytes: bytes, image_name: str):
 
 def _run_mri_3d(volume_path: str, volume_name: str):
     """Runs the 3D MRI model and renders results. Shared by upload/OASIS1_raw picker."""
-    from alz.imaging import gradcam_mri_3d, predict_mri_probs_3d
+    from alz.imaging import gradcam_mri_3d, gradcam_volume_3d, mri_volume_figure, predict_mri_probs_3d
 
     result = predict_mri_probs_3d(volume_path)
     st.session_state.mri_selected = {"name": volume_name, "bytes": None, "result": result}
@@ -542,6 +546,18 @@ def _run_mri_3d(volume_path: str, volume_name: str):
         except Exception:
             st.info("Heatmap unavailable for this image.")
 
+    st.session_state.mri_3d_result = {"result": result, "cam": (cam or {}).get("cam")}
+
+    with st.expander("3D volume (rotatable)"):
+        try:
+            with st.spinner("Computing volumetric Grad-CAM..."):
+                cam_volume = gradcam_volume_3d(volume_path)["cam_volume"]
+        except Exception:
+            cam_volume = None
+            st.info("Volumetric heatmap unavailable for this image.")
+        with st.spinner("Rendering 3D volume..."):
+            st.plotly_chart(mri_volume_figure(volume_path, cam_volume=cam_volume), width="stretch")
+
     with st.expander("What do these categories mean?"):
         st.markdown(
             "- **Non Demented** — no clinical signs of cognitive decline.\n"
@@ -561,13 +577,71 @@ def _run_mri_3d(volume_path: str, volume_name: str):
             st.caption("LLM explanation unavailable (check LLM provider configuration).")
 
 
+def _run_mri_combined():
+    """Fuses the last 2D and 3D results (each stashed by _run_mri_2d/_run_mri_3d)
+    into one combined score, classification, and radiology report."""
+    from alz.explain import explain_mri_combined
+    from alz.fusion import combine_mri
+
+    r2d = st.session_state.mri_2d_result
+    r3d = st.session_state.mri_3d_result
+    if not r2d or not r3d:
+        st.info("Run both the 2D slice and 3D volume analyses first; this tab combines their results.")
+        return
+
+    combined = combine_mri(r2d["result"], r3d["result"])
+    st.session_state.mri_selected = {"name": "2D + 3D combined", "bytes": None, "result": combined}
+
+    st.metric("Combined dementia confirmation", combined["label"], f"{combined['score']:.0%} confidence")
+    pending = [
+        name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
+        if not done
+    ]
+    st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(combined['label'], 'high'), pending)}")
+
+    agree = r2d["result"]["label"] == r3d["result"]["label"]
+    st.markdown(
+        f"2D and 3D {'agree' if agree else 'disagree'} on the predicted label: "
+        f"2D → {chip(r2d['result']['label'], MRI_LEVELS.get(r2d['result']['label'], 'high'))}, "
+        f"3D → {chip(r3d['result']['label'], MRI_LEVELS.get(r3d['result']['label'], 'high'))}",
+        unsafe_allow_html=True,
+    )
+
+    p2d = 1 - r2d["result"]["probs"]["Non Demented"]
+    p3d = 1 - r3d["result"]["probs"]["Non Demented"]
+    p_combined = combined["probs"]["Demented"]
+    bar = go.Figure(go.Bar(
+        x=[p2d, p3d, p_combined], y=["2D", "3D", "Combined"], orientation="h",
+        marker_color=["#636EFA", "#636EFA", "#4C8BF5"],
+        text=[f"{v:.0%}" for v in [p2d, p3d, p_combined]], textposition="inside",
+    ))
+    bar.update_layout(
+        height=180, margin=dict(l=10, r=10, t=10, b=10),
+        xaxis=dict(range=[0, 1], tickformat=".0%", title="P(Demented)"),
+    )
+    st.plotly_chart(bar, width="stretch")
+
+    st.subheader("Radiology report summary")
+    with st.container(border=True):
+        with st.spinner("Generating explanation..."):
+            explanation = explain_mri_combined(
+                r2d["result"], r3d["result"], combined, cam_2d=r2d["cam"], cam_3d=r3d["cam"]
+            )
+        st.markdown(f"**IMPRESSION:** {combined['label']} ({combined['score']:.0%} model confidence)")
+        st.markdown("**FINDINGS:**")
+        if explanation:
+            st.write(explanation)
+        else:
+            st.caption("LLM explanation unavailable (check LLM provider configuration).")
+
+
 with tab_mri:
     try:
         from alz import imaging as _imaging_check  # noqa: F401
     except ImportError:
         st.warning("MRI dependencies not installed — see requirements-imaging.txt")
     else:
-        sub2d, sub3d = st.tabs(["2D slice", "3D volume"])
+        sub2d, sub3d, subcombined = st.tabs(["2D slice", "3D volume", "2D + 3D combined"])
 
         with sub2d:
             with st.container(border=True):
@@ -630,6 +704,9 @@ with tab_mri:
                 _run_mri_3d(path, chosen_subject)
             else:
                 st.caption("Upload a volume or select a subject to begin.")
+
+        with subcombined:
+            _run_mri_combined()
 
 # ---------------------------------------------------------------------------
 # Tab 4: EEG records

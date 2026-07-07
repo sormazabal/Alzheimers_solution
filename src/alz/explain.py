@@ -311,6 +311,57 @@ def explain_mri(result: dict, image_bytes: bytes | None = None, cam=None) -> str
         return None
 
 
+def explain_mri_combined(
+    result_2d: dict, result_3d: dict, combined: dict, cam_2d=None, cam_3d=None
+) -> str | None:
+    """Consolidated radiology-style findings drawing on both the 2D and 3D
+    predictions and their Grad-CAM attention. Text LLM only -- the per-path tabs
+    already do a vision pass on the actual pixels; this reconciles their outputs,
+    it doesn't re-read the scan. Returns None on any LLM failure, same
+    graceful-degradation contract as explain_mri.
+    """
+    import json
+
+    p2d = 1 - result_2d["probs"]["Non Demented"]
+    p3d = 1 - result_3d["probs"]["Non Demented"]
+    agree = result_2d["label"] == result_3d["label"]
+
+    attention_lines = []
+    if cam_2d is not None:
+        attention_lines.append(f"2D slice Grad-CAM attention was {_attention_summary(cam_2d)}.")
+    if cam_3d is not None:
+        attention_lines.append(f"3D representative-slice Grad-CAM attention was {_attention_summary(cam_3d)}.")
+    attention_text = " ".join(attention_lines)
+
+    prompt = (
+        f"An MRI-based dementia confirmation classifier was run two ways on the same case: "
+        f"a 2D model on an individual slice (P(Demented)={p2d:.1%}, predicted '{result_2d['label']}') "
+        f"and a 3D model pooling central axial slices of the volume "
+        f"(P(Demented)={p3d:.1%}, predicted '{result_3d['label']}'). "
+        f"The two {'agree' if agree else 'disagree'} on the predicted label. "
+        f"Combining both in log-odds space gives an overall prediction of '{combined['label']}' "
+        f"with {combined['score']:.1%} confidence. "
+        f"Class meanings: {_MRI_CLASS_MEANINGS} {attention_text} "
+        "In 2-3 sentences, write a consolidated radiology-style FINDINGS statement that "
+        "reconciles the 2D and 3D estimates -- note agreement or disagreement between them "
+        "and comment on likely neurologically relevant features (ventricle size, "
+        "medial-temporal/hippocampal atrophy, cortical atrophy, symmetry) consistent with the "
+        "combined prediction. Note the model's uncertainty where relevant, and make clear this "
+        "is a screening aid, not a diagnosis. You are a clinical decision-support tool for a "
+        "licensed clinician, not a chatbot talking to a patient -- always give your best "
+        "concrete, specific findings; never refuse or reply with a generic disclaimer like "
+        "\"I can't provide specific medical information\". "
+        'Respond as JSON: {"findings": "..."}'
+    )
+
+    try:
+        response = _default_client().complete([{"role": "user", "content": prompt}])
+        return _coerce_findings_text(json.loads(_strip_code_fence(response), strict=False)["findings"])
+    except Exception:
+        _log.exception("explain_mri_combined LLM call failed")
+        return None
+
+
 def _case_context(patient: dict, clinical_result: dict | None, mri_result: dict | None, eeg_result: dict | None) -> str:
     """Plain-text digest of whichever assessments are available, for prompting the LLM."""
     lines = [f"Patient: {patient['sex']}, DOB {patient['dob']}. History: {patient['history']}"]

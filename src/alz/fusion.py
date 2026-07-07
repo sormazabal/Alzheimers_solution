@@ -72,6 +72,21 @@ def integrated_score(
     }
 
 
+def combine_mri(result_2d: dict, result_3d: dict) -> dict:
+    """Equal-weight log-odds pool of the 2D and 3D MRI result dicts into one
+    result-shaped dict {'probs': {'Non Demented', 'Demented'}, 'label', 'score'}.
+
+    Pools P(Demented) (1 - probs['Non Demented']) in log-odds space -- NOT the
+    'score' field, whose polarity flips with the predicted label.
+    """
+    p2d = 1 - result_2d["probs"]["Non Demented"]
+    p3d = 1 - result_3d["probs"]["Non Demented"]
+    p_dem = _sigmoid((_logit(p2d) + _logit(p3d)) / 2)
+    probs = {"Non Demented": 1 - p_dem, "Demented": p_dem}
+    label = max(probs, key=probs.get)
+    return {"probs": probs, "label": label, "score": probs[label]}
+
+
 def demo():  # ponytail-required self-check for the only nontrivial pure logic here
     assert integrated_score() is None
     only_clinical = integrated_score(clinical={"score": 0.7})
@@ -80,6 +95,19 @@ def demo():  # ponytail-required self-check for the only nontrivial pure logic h
         clinical={"score": 0.5}, mri={"probs": {"Non Demented": 0.1}}
     )
     assert confident_mri_uncertain_clinical["score"] > 0.7  # MRI dominates the uncertain clinical opinion
+
+    agree = combine_mri(
+        {"probs": {"Non Demented": 0.1, "Demented": 0.9}},
+        {"probs": {"Non Demented": 0.2, "Demented": 0.8}},
+    )
+    assert agree["label"] == "Demented"
+    assert 0.8 < agree["probs"]["Demented"] < 0.9
+
+    disagree = combine_mri(
+        {"probs": {"Non Demented": 0.9, "Demented": 0.1}},
+        {"probs": {"Non Demented": 0.1, "Demented": 0.9}},
+    )
+    assert abs(disagree["probs"]["Demented"] - 0.5) < 1e-9  # symmetric disagreement cancels out
 
 
 demo()

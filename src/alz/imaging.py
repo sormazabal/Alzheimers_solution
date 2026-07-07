@@ -397,6 +397,55 @@ def predict_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     return {"score": result["score"], "label": result["label"]}
 
 
+def _compute_cam(model, tensor, target_idx: int | None = None):
+    """Batched Grad-CAM via forward/backward hooks on model.layer4[-1].
+
+    tensor: (N, 3, 224, 224), requires_grad=True. target_idx: fixed class index to
+    backprop for every sample (needed for a coherent volumetric CAM across slices), or
+    None to use each sample's own argmax (single-image case).
+
+    Returns (cam (N, 224, 224) raw/unnormalized, label_idx (N,) int array, score (N,) float array).
+    Batching is safe here because the model runs in eval mode (BatchNorm uses running
+    stats, not batch stats), so summing per-sample logits before backward() still yields
+    independent, correct per-sample gradients.
+    """
+    import torch
+    import torch.nn.functional as F
+
+    activations, gradients = {}, {}
+    target_layer = model.layer4[-1]
+
+    def _forward_hook(_module, _input, output):
+        activations["value"] = output
+
+    def _backward_hook(_module, _grad_input, grad_output):
+        gradients["value"] = grad_output[0]
+
+    handle_f = target_layer.register_forward_hook(_forward_hook)
+    handle_b = target_layer.register_full_backward_hook(_backward_hook)
+    try:
+        model.zero_grad()
+        logits = model(tensor)
+        probs = torch.softmax(logits, dim=1)
+        if target_idx is None:
+            label_idx = probs.argmax(dim=1)
+        else:
+            label_idx = torch.full((tensor.shape[0],), target_idx, device=tensor.device, dtype=torch.long)
+        score = probs.gather(1, label_idx.unsqueeze(1)).squeeze(1)
+        logits.gather(1, label_idx.unsqueeze(1)).squeeze(1).sum().backward()
+
+        weights = gradients["value"].mean(dim=(2, 3), keepdim=True)
+        cam = F.relu((weights * activations["value"]).sum(dim=1, keepdim=True))
+        cam = F.interpolate(cam, size=(224, 224), mode="bilinear", align_corners=False)[:, 0]
+        cam = cam.detach().cpu().numpy()
+        label_idx = label_idx.detach().cpu().numpy()
+        score = score.detach().cpu().numpy()
+    finally:
+        handle_f.remove()
+        handle_b.remove()
+    return cam, label_idx, score
+
+
 def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     """Grad-CAM overlay showing which regions of the scan drove the prediction.
 
@@ -424,33 +473,9 @@ def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
     # through them unless the input itself requires grad.
     tensor = _transform()(image).unsqueeze(0).to(device).requires_grad_(True)
 
-    activations, gradients = {}, {}
-    target_layer = model.layer4[-1]
-
-    def _forward_hook(_module, _input, output):
-        activations["value"] = output
-
-    def _backward_hook(_module, _grad_input, grad_output):
-        gradients["value"] = grad_output[0]
-
-    handle_f = target_layer.register_forward_hook(_forward_hook)
-    handle_b = target_layer.register_full_backward_hook(_backward_hook)
-    try:
-        model.zero_grad()
-        logits = model(tensor)
-        probs = torch.softmax(logits, dim=1)[0]
-        label_idx = int(probs.argmax())
-        logits[0, label_idx].backward()
-
-        weights = gradients["value"].mean(dim=(2, 3), keepdim=True)
-        cam = F.relu((weights * activations["value"]).sum(dim=1, keepdim=True))
-        cam = F.interpolate(cam, size=(224, 224), mode="bilinear", align_corners=False)[0, 0]
-        cam = cam.detach().cpu().numpy()
-        cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
-        score = float(probs[label_idx].detach())
-    finally:
-        handle_f.remove()
-        handle_b.remove()
+    cams, label_idxs, scores = _compute_cam(model, tensor)
+    cam, label_idx, score = cams[0], int(label_idxs[0]), float(scores[0])
+    cam = (cam - cam.min()) / (cam.max() - cam.min() + 1e-8)
 
     heatmap = (matplotlib.colormaps["jet"](cam)[:, :, :3] * 255).astype(np.uint8)
     base = np.asarray(display_image).astype(np.float32)
@@ -549,3 +574,97 @@ def gradcam_mri_3d(path, model_path: str = DEFAULT_MODEL_PATH, n_slices: int = 1
 
     cam_result["slice_index"] = result["slice_index"]
     return cam_result
+
+
+def gradcam_volume_3d(path, model_path: str = DEFAULT_MODEL_PATH, max_dim: int = 64) -> dict:
+    """True volumetric Grad-CAM: runs the 2D CAM hook on every axial slice at the same
+    stride mri_volume_figure uses for its anatomy grid, so the resulting activation
+    volume lines up voxel-for-voxel with mri_volume_figure's downsampled output and can
+    be overlaid via its cam_volume= argument.
+
+    Returns {'cam_volume': np.ndarray (nx, ny, nz) in [0, 1], 'label': str, 'score': float}.
+    """
+    import nibabel as nib
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    dev = _device()
+    model, classes = _load_mri_model(model_path, dev)
+
+    vol = nib.as_closest_canonical(nib.load(path)).get_fdata()
+    if vol.ndim == 4:
+        vol = vol[..., 0]
+
+    step = max(1, int(np.ceil(max(vol.shape) / max_dim)))
+    nx, ny, nz = vol[::step, ::step, ::step].shape
+
+    lo_p, hi_p = np.percentile(vol, [1, 99])
+    tf = _transform()
+    slices = []
+    for z in range(0, vol.shape[2], step)[:nz]:
+        s = np.clip(vol[:, :, z], lo_p, hi_p)
+        s = ((s - lo_p) / (hi_p - lo_p + 1e-6) * 255).astype(np.uint8)
+        slices.append(tf(Image.fromarray(s).convert("RGB")))
+    batch = torch.stack(slices).to(dev).requires_grad_(True)
+
+    with torch.no_grad():
+        pooled_probs = torch.softmax(model(batch), dim=1).mean(dim=0)
+    label_idx = int(pooled_probs.argmax())
+
+    cams, _, _ = _compute_cam(model, batch, target_idx=label_idx)
+    cams = (cams - cams.min()) / (cams.max() - cams.min() + 1e-8)
+
+    cam_volume = np.stack([
+        np.asarray(Image.fromarray((c * 255).astype(np.uint8)).resize((ny, nx), Image.BILINEAR)) / 255.0
+        for c in cams
+    ], axis=2)
+
+    return {"cam_volume": cam_volume, "label": classes[label_idx], "score": float(pooled_probs[label_idx])}
+
+
+def mri_volume_figure(path, max_dim: int = 64, cam_volume=None):
+    """Rotatable 3D volume rendering of a NIfTI MRI for the UI.
+
+    Returns a plotly go.Volume figure. Downsampled so the browser can render it
+    interactively -- go.Volume bogs down above ~10^5 voxels.
+
+    cam_volume: optional np.ndarray (same shape as the downsampled anatomy grid, values
+    in [0, 1]) from gradcam_volume_3d, rendered as a second semi-transparent hot-colorscale
+    trace layered over the grayscale anatomy.
+
+    ponytail: nearest-neighbour stride downsample, no anti-aliasing. Fine for a
+    look-and-rotate view; swap in scipy.ndimage.zoom if a smoother render is needed.
+    """
+    import nibabel as nib
+    import numpy as np
+    import plotly.graph_objects as go
+
+    vol = nib.as_closest_canonical(nib.load(path)).get_fdata()
+    if vol.ndim == 4:
+        vol = vol[..., 0]
+
+    step = max(1, int(np.ceil(max(vol.shape) / max_dim)))
+    vol = vol[::step, ::step, ::step].astype(np.float32)
+
+    lo, hi = np.percentile(vol, [1, 99])
+    vol = np.clip((vol - lo) / (hi - lo + 1e-8), 0, 1)
+
+    x, y, z = np.mgrid[0:vol.shape[0], 0:vol.shape[1], 0:vol.shape[2]]
+    traces = [go.Volume(
+        x=x.flatten(), y=y.flatten(), z=z.flatten(), value=vol.flatten(),
+        isomin=0.15, isomax=1.0, opacity=0.1, surface_count=17,
+        colorscale="Gray", showscale=False,
+    )]
+    if cam_volume is not None:
+        traces.append(go.Volume(
+            x=x.flatten(), y=y.flatten(), z=z.flatten(), value=cam_volume.flatten(),
+            isomin=0.4, isomax=1.0, opacity=0.25, surface_count=12,
+            colorscale="Hot", showscale=False,
+        ))
+    fig = go.Figure(traces)
+    fig.update_layout(
+        height=500, margin=dict(l=0, r=0, t=0, b=0),
+        scene=dict(xaxis_visible=False, yaxis_visible=False, zaxis_visible=False),
+    )
+    return fig
