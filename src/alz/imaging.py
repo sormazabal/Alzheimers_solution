@@ -4,6 +4,10 @@ The Kaggle imagesoasis mirror (see data/download_oasis.py) ships 2D JPEG brain s
 in per-class folders, not 3D NIfTI volumes -- so this follows a torchvision ResNet18
 transfer-learning recipe (frozen backbone, retrained head) rather than the 3D
 MONAI/TorchIO/MedicalNet pipeline in the vendor notebook, which targets volumetric data.
+
+3D NIfTI volumes (e.g. OASIS-3) are supported via predict_mri_probs_3d / gradcam_mri_3d,
+which apply this same 2D model to central axial slices and pool the result -- a v1 that
+skips training rather than a native volumetric model. See docs for the domain-gap caveat.
 """
 from functools import lru_cache
 
@@ -412,3 +416,88 @@ def gradcam_mri(path, model_path: str = DEFAULT_MODEL_PATH) -> dict:
         "score": score,
         "cam": cam,
     }
+
+
+def _central_axial_slices(vol, n_slices: int):
+    """Middle n_slices along the axial axis of a canonical-orientation volume,
+    percentile-clipped and rescaled to uint8. Returns a list of 2D arrays.
+
+    ponytail: fixed axis=2 (axial) assumes nib.as_closest_canonical orientation.
+    """
+    import numpy as np
+
+    depth = vol.shape[2]
+    n = min(n_slices, depth)
+    lo = max(0, depth // 2 - n // 2)
+    selected = vol[:, :, lo:lo + n]
+
+    lo_p, hi_p = np.percentile(selected, [1, 99])
+    clipped = np.clip(selected, lo_p, hi_p)
+    scaled = ((clipped - lo_p) / (hi_p - lo_p + 1e-6) * 255).astype(np.uint8)
+    return [scaled[:, :, i] for i in range(scaled.shape[2])]
+
+
+def predict_mri_probs_3d(
+    path, model_path: str = DEFAULT_MODEL_PATH, n_slices: int = 16, device: str | None = None
+) -> dict:
+    """3D drop-in for predict_mri_probs: applies the existing 2D model to the central
+    axial slices of a NIfTI volume and mean-pools the softmax probabilities.
+
+    ponytail: v1 domain-gap caveat -- the model learned OASIS JPEG slices, not raw
+    NIfTI intensities; percentile-clip + rescale narrows but doesn't close the gap.
+    Upgrade to a fine-tuned native 3D model if accuracy on real OASIS-3 falls short.
+
+    Returns {'probs': {...}, 'label': str, 'score': float, 'slice_index': int,
+    'slice_array': np.ndarray} -- the last two identify the most-confident slice
+    for representative-slice Grad-CAM (see gradcam_mri_3d).
+
+    'path' may be a filesystem path (NIfTI needs real file access for gzip seeking,
+    so a BytesIO caller should spool to a temp file first).
+    """
+    import nibabel as nib
+    import numpy as np
+    import torch
+    from PIL import Image
+
+    dev = _device(device)
+    model, classes = _load_mri_model(model_path, dev)
+
+    vol = nib.as_closest_canonical(nib.load(path)).get_fdata()
+    slices = _central_axial_slices(vol, n_slices)
+
+    tf = _transform()
+    batch = torch.stack([tf(Image.fromarray(s).convert("RGB")) for s in slices]).to(dev)
+    with torch.no_grad():
+        per_slice_probs = torch.softmax(model(batch), dim=1)
+        probs = per_slice_probs.mean(dim=0)
+
+    demented_idx = classes.index("Demented")
+    slice_idx = int(per_slice_probs[:, demented_idx].argmax())
+
+    label_idx = int(probs.argmax())
+    return {
+        "probs": {c: float(p) for c, p in zip(classes, probs.tolist())},
+        "label": classes[label_idx],
+        "score": float(probs[label_idx]),
+        "slice_index": slice_idx,
+        "slice_array": slices[slice_idx],
+    }
+
+
+def gradcam_mri_3d(path, model_path: str = DEFAULT_MODEL_PATH, n_slices: int = 16) -> dict:
+    """Representative-slice Grad-CAM for a 3D volume: runs the existing 2D gradcam_mri
+    on the single central axial slice with the highest P(Demented), so the same
+    hook-based CAM logic applies unchanged. Not a true volumetric CAM (see TODO-2 in
+    the 3D integration plan) -- label this in the UI as a representative slice.
+    """
+    import tempfile
+
+    from PIL import Image
+
+    result = predict_mri_probs_3d(path, model_path, n_slices)
+    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+        Image.fromarray(result["slice_array"]).save(tmp.name)
+        cam_result = gradcam_mri(tmp.name, model_path)
+
+    cam_result["slice_index"] = result["slice_index"]
+    return cam_result

@@ -1,8 +1,8 @@
 {
   "accuracy": 0.6666666666666666,
   "balanced_accuracy": 0.5,
-  "auroc": 0.5555555555555556,
-  "auprc": 0.5873015873015872,
+  "auroc": 0.6666666666666667,
+  "auprc": 0.5,
   "f1": 0.0,
   "sensitivity": 0.0,
   "specificity": 1.0,

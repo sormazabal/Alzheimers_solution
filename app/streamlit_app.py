@@ -413,7 +413,9 @@ with tab_clinical:
 # ---------------------------------------------------------------------------
 with tab_mri:
     with st.container(border=True):
-        uploaded = st.file_uploader("Upload a new brain scan", type=["jpg", "jpeg", "png"])
+        uploaded = st.file_uploader(
+            "Upload a new brain scan", type=["jpg", "jpeg", "png", "nii", "gz"]
+        )
         if uploaded is not None:
             uploaded_bytes = uploaded.getvalue()
             if not any(s["name"] == uploaded.name for s in st.session_state.mri_scans):
@@ -425,16 +427,32 @@ with tab_mri:
             default_idx = names.index(st.session_state.get("mri_selected_name", names[-1])) if st.session_state.get("mri_selected_name") in names else len(names) - 1
             chosen_name = st.selectbox("Scan history", names, index=default_idx)
             scan = next(s for s in st.session_state.mri_scans if s["name"] == chosen_name)
+            is_3d = scan["name"].lower().endswith((".nii", ".nii.gz"))
 
             try:
-                from alz.imaging import gradcam_mri, predict_mri_probs
+                from alz.imaging import gradcam_mri, gradcam_mri_3d, predict_mri_probs, predict_mri_probs_3d
             except ImportError:
                 st.warning("MRI dependencies not installed — see requirements-imaging.txt")
             else:
                 if scan["result"] is None:
-                    scan["result"] = predict_mri_probs(io.BytesIO(scan["bytes"]))
+                    if is_3d:
+                        import tempfile
+
+                        suffix = ".nii.gz" if scan["name"].lower().endswith(".nii.gz") else ".nii"
+                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                            tmp.write(scan["bytes"])
+                            scan["_tmp_path"] = tmp.name
+                        scan["result"] = predict_mri_probs_3d(scan["_tmp_path"])
+                    else:
+                        scan["result"] = predict_mri_probs(io.BytesIO(scan["bytes"]))
                 result = scan["result"]
                 st.session_state.mri_selected = scan
+
+                if is_3d:
+                    st.caption(
+                        "3D volume (v1): the existing 2D model is applied to central axial "
+                        "slices and pooled — not a validated volumetric classifier."
+                    )
 
                 st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
                 pending = [
@@ -455,12 +473,20 @@ with tab_mri:
                 img_col, cam_col = st.columns(2)
                 cam = None
                 with img_col:
-                    st.image(scan["bytes"], caption="Uploaded scan", width="stretch")
+                    if is_3d:
+                        st.image(
+                            result["slice_array"],
+                            caption=f"Central axial slice #{result['slice_index']} (most-affected)",
+                            width="stretch",
+                        )
+                    else:
+                        st.image(scan["bytes"], caption="Uploaded scan", width="stretch")
                 with cam_col:
                     try:
                         with st.spinner("Computing Grad-CAM heatmap..."):
-                            cam = gradcam_mri(io.BytesIO(scan["bytes"]))
-                        st.image(cam["overlay"], caption="Grad-CAM: regions driving the prediction", width="stretch")
+                            cam = gradcam_mri_3d(scan["_tmp_path"]) if is_3d else gradcam_mri(io.BytesIO(scan["bytes"]))
+                        caption = "Grad-CAM: representative slice" if is_3d else "Grad-CAM: regions driving the prediction"
+                        st.image(cam["overlay"], caption=caption, width="stretch")
                     except Exception:
                         st.info("Heatmap unavailable for this image.")
 
@@ -475,7 +501,9 @@ with tab_mri:
                 with st.container(border=True):
                     with st.spinner("Generating explanation..."):
                         explanation = explain_mri(
-                            result, image_bytes=scan["bytes"], cam=(cam or {}).get("cam")
+                            result,
+                            image_bytes=None if is_3d else scan["bytes"],
+                            cam=(cam or {}).get("cam"),
                         )
                     st.markdown(f"**IMPRESSION:** {result['label']} ({result['score']:.0%} model confidence)")
                     st.markdown("**FINDINGS:**")
