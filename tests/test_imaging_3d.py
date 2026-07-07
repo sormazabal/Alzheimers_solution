@@ -15,7 +15,7 @@ pytest.importorskip("torchvision")
 pytest.importorskip("PIL")
 nib = pytest.importorskip("nibabel")
 
-from alz.imaging import _central_axial_slices, gradcam_mri_3d, predict_mri_probs_3d, train_mri
+from alz.imaging import _central_axial_slices, gradcam_mri_3d, gradcam_volume_3d, predict_mri_probs_3d, train_mri
 from test_imaging import FOLDERS, _make_synthetic_dataset
 
 CLASSES = ["Non Demented", "Demented"]
@@ -74,6 +74,24 @@ def test_gradcam_mri_3d(tmp_path):
     assert cam["slice_index"] == expected["slice_index"]
 
 
+def test_gradcam_volume_3d(tmp_path):
+    data_dir = str(tmp_path / "data")
+    model_path = str(tmp_path / "mri_model.pt")
+    nifti_path = str(tmp_path / "scan.nii.gz")
+
+    _make_synthetic_dataset(data_dir)
+    train_mri(data_dir, out_path=model_path, epochs=1)
+    _make_synthetic_volume(nifti_path, shape=(64, 64, 40))
+
+    result = gradcam_volume_3d(nifti_path, model_path=model_path, max_dim=16)
+
+    assert result["label"] in CLASSES
+    # cam_volume must line up voxel-for-voxel with mri_volume_figure's downsampled grid:
+    # step = ceil(max(64,64,40)/16) = 4 -> (16, 16, 10)
+    assert result["cam_volume"].shape == (16, 16, 10)
+    assert result["cam_volume"].min() >= 0.0 and result["cam_volume"].max() <= 1.0 + 1e-6
+
+
 if __name__ == "__main__":
     import pathlib
     import tempfile
@@ -83,4 +101,6 @@ if __name__ == "__main__":
         test_predict_mri_probs_3d(pathlib.Path(tmp))
     with tempfile.TemporaryDirectory() as tmp:
         test_gradcam_mri_3d(pathlib.Path(tmp))
+    with tempfile.TemporaryDirectory() as tmp:
+        test_gradcam_volume_3d(pathlib.Path(tmp))
     print("ok")
