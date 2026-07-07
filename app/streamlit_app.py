@@ -95,7 +95,6 @@ if "patient" not in st.session_state:
     }
 st.session_state.setdefault("clinical_result", None)
 st.session_state.setdefault("clinical_record", None)
-st.session_state.setdefault("mri_scans", [])  # [{"name","bytes","result"}]
 st.session_state.setdefault("mri_selected", None)
 st.session_state.setdefault("eeg_result", None)
 st.session_state.setdefault("mmse_history", [29, 28])  # demo prior-visit MMSE scores
@@ -411,108 +410,226 @@ with tab_clinical:
 # ---------------------------------------------------------------------------
 # Tab 3: MRI records
 # ---------------------------------------------------------------------------
-with tab_mri:
-    with st.container(border=True):
-        uploaded = st.file_uploader(
-            "Upload a new brain scan", type=["jpg", "jpeg", "png", "nii", "gz"]
+IMAGESOASIS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "imagesoasis", "versions", "1", "Data")
+OASIS1_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "OASIS1_raw")
+
+
+@st.cache_data
+def _mri_2d_examples() -> list[dict]:
+    """A few example 2D slices per class from the imagesoasis mirror, for a picker
+    like the EEG tab's example dropdown.
+
+    ponytail: caps at 3 per class; raise if a bigger gallery is wanted.
+    """
+    import glob
+
+    examples = []
+    for cls in ["Non Demented", "Mild Dementia", "Moderate Dementia"]:
+        paths = sorted(glob.glob(os.path.join(IMAGESOASIS_DIR, cls, "*.jpg")))[:3]
+        for path in paths:
+            examples.append({"name": f"{cls} — {os.path.basename(path)}", "path": path})
+    return examples
+
+
+@st.cache_data
+def _oasis1_subjects() -> list[dict]:
+    """OASIS-1 subjects available on disk under data/OASIS1_raw, using the
+    atlas-registered, masked, gain-field-corrected volume for each subject.
+
+    ponytail: fixed to the t88_masked_gfc variant; add a variant selector if asked.
+    """
+    import glob
+
+    pattern = os.path.join(OASIS1_RAW_DIR, "**", "*_t88_masked_gfc.hdr")
+    paths = sorted(glob.glob(pattern, recursive=True))
+    return [{"name": os.path.basename(p).split("_mpr")[0], "path": p} for p in paths]
+
+
+def _run_mri_2d(image_bytes: bytes, image_name: str):
+    """Runs the 2D MRI model and renders results. Shared by upload/example/history."""
+    from alz.imaging import gradcam_mri, predict_mri_probs
+
+    result = predict_mri_probs(io.BytesIO(image_bytes))
+    st.session_state.mri_selected = {"name": image_name, "bytes": image_bytes, "result": result}
+
+    st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
+    pending = [
+        name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
+        if not done
+    ]
+    st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'high'), pending)}")
+
+    probs = result["probs"]
+    bar = go.Figure(go.Bar(
+        x=list(probs.values()), y=list(probs.keys()), orientation="h",
+        marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
+        text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
+    ))
+    bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
+    st.plotly_chart(bar, width="stretch")
+
+    img_col, cam_col = st.columns(2)
+    cam = None
+    with img_col:
+        st.image(image_bytes, caption="Selected slice", width="stretch")
+    with cam_col:
+        try:
+            with st.spinner("Computing Grad-CAM heatmap..."):
+                cam = gradcam_mri(io.BytesIO(image_bytes))
+            st.image(cam["overlay"], caption="Grad-CAM: regions driving the prediction", width="stretch")
+        except Exception:
+            st.info("Heatmap unavailable for this image.")
+
+    with st.expander("What do these categories mean?"):
+        st.markdown(
+            "- **Non Demented** — no clinical signs of cognitive decline.\n"
+            "- **Demented** — MRI features consistent with dementia (mild or moderate); "
+            "this model confirms presence, not severity."
         )
-        if uploaded is not None:
-            uploaded_bytes = uploaded.getvalue()
-            if not any(s["name"] == uploaded.name for s in st.session_state.mri_scans):
-                st.session_state.mri_scans.append({"name": uploaded.name, "bytes": uploaded_bytes, "result": None})
-            st.session_state.mri_selected_name = uploaded.name
 
-        if st.session_state.mri_scans:
-            names = [s["name"] for s in st.session_state.mri_scans]
-            default_idx = names.index(st.session_state.get("mri_selected_name", names[-1])) if st.session_state.get("mri_selected_name") in names else len(names) - 1
-            chosen_name = st.selectbox("Scan history", names, index=default_idx)
-            scan = next(s for s in st.session_state.mri_scans if s["name"] == chosen_name)
-            is_3d = scan["name"].lower().endswith((".nii", ".nii.gz"))
-
-            try:
-                from alz.imaging import gradcam_mri, gradcam_mri_3d, predict_mri_probs, predict_mri_probs_3d
-            except ImportError:
-                st.warning("MRI dependencies not installed — see requirements-imaging.txt")
-            else:
-                if scan["result"] is None:
-                    if is_3d:
-                        import tempfile
-
-                        suffix = ".nii.gz" if scan["name"].lower().endswith(".nii.gz") else ".nii"
-                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                            tmp.write(scan["bytes"])
-                            scan["_tmp_path"] = tmp.name
-                        scan["result"] = predict_mri_probs_3d(scan["_tmp_path"])
-                    else:
-                        scan["result"] = predict_mri_probs(io.BytesIO(scan["bytes"]))
-                result = scan["result"]
-                st.session_state.mri_selected = scan
-
-                if is_3d:
-                    st.caption(
-                        "3D volume (v1): the existing 2D model is applied to central axial "
-                        "slices and pooled — not a validated volumetric classifier."
-                    )
-
-                st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
-                pending = [
-                    name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
-                    if not done
-                ]
-                st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'high'), pending)}")
-
-                probs = result["probs"]
-                bar = go.Figure(go.Bar(
-                    x=list(probs.values()), y=list(probs.keys()), orientation="h",
-                    marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
-                    text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
-                ))
-                bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
-                st.plotly_chart(bar, width="stretch")
-
-                img_col, cam_col = st.columns(2)
-                cam = None
-                with img_col:
-                    if is_3d:
-                        st.image(
-                            result["slice_array"],
-                            caption=f"Central axial slice #{result['slice_index']} (most-affected)",
-                            width="stretch",
-                        )
-                    else:
-                        st.image(scan["bytes"], caption="Uploaded scan", width="stretch")
-                with cam_col:
-                    try:
-                        with st.spinner("Computing Grad-CAM heatmap..."):
-                            cam = gradcam_mri_3d(scan["_tmp_path"]) if is_3d else gradcam_mri(io.BytesIO(scan["bytes"]))
-                        caption = "Grad-CAM: representative slice" if is_3d else "Grad-CAM: regions driving the prediction"
-                        st.image(cam["overlay"], caption=caption, width="stretch")
-                    except Exception:
-                        st.info("Heatmap unavailable for this image.")
-
-                with st.expander("What do these categories mean?"):
-                    st.markdown(
-                        "- **Non Demented** — no clinical signs of cognitive decline.\n"
-                        "- **Demented** — MRI features consistent with dementia (mild or moderate); "
-                        "this model confirms presence, not severity."
-                    )
-
-                st.subheader("Radiology report summary")
-                with st.container(border=True):
-                    with st.spinner("Generating explanation..."):
-                        explanation = explain_mri(
-                            result,
-                            image_bytes=None if is_3d else scan["bytes"],
-                            cam=(cam or {}).get("cam"),
-                        )
-                    st.markdown(f"**IMPRESSION:** {result['label']} ({result['score']:.0%} model confidence)")
-                    st.markdown("**FINDINGS:**")
-                    if explanation:
-                        st.write(explanation)
-                    else:
-                        st.caption("LLM explanation unavailable (check LLM provider configuration).")
+    st.subheader("Radiology report summary")
+    with st.container(border=True):
+        with st.spinner("Generating explanation..."):
+            explanation = explain_mri(result, image_bytes=image_bytes, cam=(cam or {}).get("cam"))
+        st.markdown(f"**IMPRESSION:** {result['label']} ({result['score']:.0%} model confidence)")
+        st.markdown("**FINDINGS:**")
+        if explanation:
+            st.write(explanation)
         else:
-            st.caption("Upload a scan to begin.")
+            st.caption("LLM explanation unavailable (check LLM provider configuration).")
+
+
+def _run_mri_3d(volume_path: str, volume_name: str):
+    """Runs the 3D MRI model and renders results. Shared by upload/OASIS1_raw picker."""
+    from alz.imaging import gradcam_mri_3d, predict_mri_probs_3d
+
+    result = predict_mri_probs_3d(volume_path)
+    st.session_state.mri_selected = {"name": volume_name, "bytes": None, "result": result}
+
+    st.caption(
+        "3D volume (v1): the existing 2D model is applied to central axial "
+        "slices and pooled — not a validated volumetric classifier."
+    )
+    st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
+    pending = [
+        name for name, done in [("Clinical", st.session_state.clinical_result), ("EEG", st.session_state.eeg_result)]
+        if not done
+    ]
+    st.info(f"**Recommended next steps:** {next_steps(MRI_LEVELS.get(result['label'], 'high'), pending)}")
+
+    probs = result["probs"]
+    bar = go.Figure(go.Bar(
+        x=list(probs.values()), y=list(probs.keys()), orientation="h",
+        marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
+        text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
+    ))
+    bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
+    st.plotly_chart(bar, width="stretch")
+
+    img_col, cam_col = st.columns(2)
+    cam = None
+    with img_col:
+        st.image(
+            result["slice_array"],
+            caption=f"Central axial slice #{result['slice_index']} (most-affected)",
+            width="stretch",
+        )
+    with cam_col:
+        try:
+            with st.spinner("Computing Grad-CAM heatmap..."):
+                cam = gradcam_mri_3d(volume_path)
+            st.image(cam["overlay"], caption="Grad-CAM: representative slice", width="stretch")
+        except Exception:
+            st.info("Heatmap unavailable for this image.")
+
+    with st.expander("What do these categories mean?"):
+        st.markdown(
+            "- **Non Demented** — no clinical signs of cognitive decline.\n"
+            "- **Demented** — MRI features consistent with dementia (mild or moderate); "
+            "this model confirms presence, not severity."
+        )
+
+    st.subheader("Radiology report summary")
+    with st.container(border=True):
+        with st.spinner("Generating explanation..."):
+            explanation = explain_mri(result, image_bytes=None, cam=(cam or {}).get("cam"))
+        st.markdown(f"**IMPRESSION:** {result['label']} ({result['score']:.0%} model confidence)")
+        st.markdown("**FINDINGS:**")
+        if explanation:
+            st.write(explanation)
+        else:
+            st.caption("LLM explanation unavailable (check LLM provider configuration).")
+
+
+with tab_mri:
+    try:
+        from alz import imaging as _imaging_check  # noqa: F401
+    except ImportError:
+        st.warning("MRI dependencies not installed — see requirements-imaging.txt")
+    else:
+        sub2d, sub3d = st.tabs(["2D slice", "3D volume"])
+
+        with sub2d:
+            with st.container(border=True):
+                uploaded = st.file_uploader("Upload a 2D slice", type=["jpg", "jpeg", "png"], key="mri_2d_uploader")
+                examples = _mri_2d_examples()
+                example_names = [e["name"] for e in examples]
+                chosen_example = st.selectbox("Or select an example slice", example_names, key="mri_2d_example") if example_names else None
+                if not example_names:
+                    st.caption("No example slices available (imagesoasis dataset not downloaded).")
+
+            if uploaded is not None:
+                _run_mri_2d(uploaded.getvalue(), uploaded.name)
+            elif chosen_example is not None:
+                path = next(e["path"] for e in examples if e["name"] == chosen_example)
+                with open(path, "rb") as f:
+                    _run_mri_2d(f.read(), chosen_example)
+            else:
+                st.caption("Upload a slice or select an example to begin.")
+
+        with sub3d:
+            with st.container(border=True):
+                uploaded_files = st.file_uploader(
+                    "Upload a volume (.nii, .nii.gz, or a matching .hdr + .img pair)",
+                    type=["nii", "gz", "hdr", "img"],
+                    accept_multiple_files=True,
+                    key="mri_3d_uploader",
+                )
+                subjects = _oasis1_subjects()
+                subject_names = [s["name"] for s in subjects]
+                chosen_subject = st.selectbox("Or select an OASIS1_raw subject", subject_names, key="mri_3d_subject") if subject_names else None
+                if not subject_names:
+                    st.caption("No OASIS1_raw subjects found on disk.")
+
+            if uploaded_files:
+                import tempfile
+
+                names_lower = [f.name.lower() for f in uploaded_files]
+                if any(n.endswith((".hdr", ".img")) for n in names_lower):
+                    tmpdir = tempfile.mkdtemp()
+                    hdr_path = None
+                    for f in uploaded_files:
+                        dest = os.path.join(tmpdir, f.name)
+                        with open(dest, "wb") as out:
+                            out.write(f.getvalue())
+                        if f.name.lower().endswith(".hdr"):
+                            hdr_path = dest
+                    if hdr_path is None:
+                        st.warning("Upload both the .hdr and .img files together.")
+                    else:
+                        _run_mri_3d(hdr_path, uploaded_files[0].name)
+                else:
+                    f = uploaded_files[0]
+                    suffix = ".nii.gz" if f.name.lower().endswith(".nii.gz") else ".nii"
+                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                        tmp.write(f.getvalue())
+                        tmp_path = tmp.name
+                    _run_mri_3d(tmp_path, f.name)
+            elif chosen_subject is not None:
+                path = next(s["path"] for s in subjects if s["name"] == chosen_subject)
+                _run_mri_3d(path, chosen_subject)
+            else:
+                st.caption("Upload a volume or select a subject to begin.")
 
 # ---------------------------------------------------------------------------
 # Tab 4: EEG records

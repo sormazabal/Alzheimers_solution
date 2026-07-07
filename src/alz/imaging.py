@@ -354,7 +354,7 @@ def _plot_curves(y_true, y_prob, classes, plot_dir: str) -> None:
 def _load_mri_model(model_path: str, device: str):
     import torch
 
-    checkpoint = torch.load(model_path, map_location=device)
+    checkpoint = torch.load(model_path, map_location=device, weights_only=False)
     model = build_mri_model(len(checkpoint["classes"]))
     model.load_state_dict(checkpoint["state_dict"])
     model.to(device)
