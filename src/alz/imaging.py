@@ -167,6 +167,7 @@ def train_mri(
 
     import torch
     from torch.utils.data import DataLoader
+    from tqdm import tqdm
 
     from alz.metrics import save_metrics
 
@@ -188,7 +189,8 @@ def train_mri(
     for epoch in range(epochs):
         model.train()
         total_loss, n_batches = 0.0, 0
-        for images, labels in train_loader:
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{epochs}", leave=False)
+        for images, labels in pbar:
             images, labels = images.to(device), labels.to(device)
             optimizer.zero_grad()
             loss = criterion(model(images), labels)
@@ -196,6 +198,7 @@ def train_mri(
             optimizer.step()
             total_loss += loss.item()
             n_batches += 1
+            pbar.set_postfix(loss=f"{total_loss / n_batches:.4f}")
         avg_loss = total_loss / n_batches if n_batches else 0.0
 
         model.eval()
@@ -463,6 +466,8 @@ def predict_mri_probs_3d(
     model, classes = _load_mri_model(model_path, dev)
 
     vol = nib.as_closest_canonical(nib.load(path)).get_fdata()
+    if vol.ndim == 4:  # ponytail: some ANALYZE exports (e.g. OASIS-1) carry a trailing singleton dim
+        vol = vol[..., 0]
     slices = _central_axial_slices(vol, n_slices)
 
     tf = _transform()

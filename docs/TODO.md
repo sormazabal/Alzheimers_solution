@@ -50,9 +50,6 @@ Future:
       validated volumetric classifier."
 - [x] Unit self-check — [tests/test_imaging_3d.py](../tests/test_imaging_3d.py) (synthetic
       NIfTI volume, checks probs/label/score contract and slice-count clamping)
-- [ ] TODO-1b — same disclosure line is still missing from
-      [docs/fusion-methodology.md](fusion-methodology.md) and
-      [docs/PRESENTATION.md](PRESENTATION.md); only the in-app caption is done
 - [ ] End-to-end manual check with a real OASIS-3 `.nii.gz` — not yet run (no sample volumes
       pulled into `data/oasis3_samples/` yet; `.gitignore` entry is already in place)
 
