@@ -59,6 +59,18 @@ def test_split_has_no_subject_overlap(tmp_path):
     assert not (val_subs & test_subs)
 
 
+def test_limit_keeps_both_classes(tmp_path):
+    """ImageFolder orders samples alphabetically by class ("Mild Dementia" before "Non
+    Demented"), so a naive positional truncation of `limit` would keep only the first
+    class's subjects. Guards against that regression."""
+    data_dir = str(tmp_path / "data")
+    _make_synthetic_dataset(data_dir, subjects_per_class=12)
+
+    train_set, val_set, test_set, _ = _load_splits(data_dir, limit=12)
+    all_labels = set(train_set.labels) | set(val_set.labels) | set(test_set.labels)
+    assert all_labels == {0, 1}
+
+
 def test_train_predict_roundtrip(tmp_path):
     data_dir = str(tmp_path / "data")
     model_path = str(tmp_path / "mri_model.pt")

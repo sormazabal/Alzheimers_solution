@@ -99,6 +99,10 @@ def _load_splits(data_dir: str, limit: int | None, seed: int = 42):
     Grouped by subject (parsed from the filename) so slices from one patient can't land in
     both train and test -- a per-slice random split leaked patients across splits and
     produced a meaningless ~1.00 accuracy.
+
+    `limit` caps the number of *subjects* (not slices) -- each subject contributes
+    hundreds to thousands of slices, so capping by raw slice count could exhaust the pool
+    on a single subject's own scans, leaving too few subjects to split.
     """
     from sklearn.model_selection import train_test_split
     from torchvision.datasets import ImageFolder
@@ -108,16 +112,41 @@ def _load_splits(data_dir: str, limit: int | None, seed: int = 42):
     non_demented_idx = dataset.class_to_idx["Non Demented"]
     label_map = {i: (0 if i == non_demented_idx else 1) for i in range(len(dataset.classes))}
 
-    n_total = len(dataset.samples)
-    pool = range(min(limit, n_total)) if limit is not None else range(n_total)
-
     subjects: dict[str, list[int]] = {}
-    for i in pool:
-        path, _ = dataset.samples[i]
+    for i, (path, _) in enumerate(dataset.samples):
         subjects.setdefault(_subject_of(path), []).append(i)
 
     subject_ids = list(subjects.keys())
     subject_labels = [label_map[dataset.samples[subjects[s][0]][1]] for s in subject_ids]
+
+    if limit is not None and limit < len(subject_ids):
+        # Plain positional truncation would keep only the alphabetically-first
+        # class folder's subjects (ImageFolder orders samples by class name),
+        # silently producing a single-class dataset -- sample stratified instead.
+        # Proportional sampling alone isn't enough: this dataset's classes are
+        # heavily imbalanced (~23 Demented vs ~1047 Non Demented subjects), so a
+        # small limit can pick so few minority subjects that the later nested
+        # 70/15/15 split fails ("least populated class has only 1 member").
+        # Reserve a floor per class first so both nested splits stay >=2/class.
+        import random
+
+        rng = random.Random(seed)
+        by_class: dict[int, list[str]] = {}
+        for s, l in zip(subject_ids, subject_labels):
+            by_class.setdefault(l, []).append(s)
+
+        # ponytail: floor of 8/class survives two rounds of stratified splitting
+        # (70/30 then 50/50) after rounding; bump if a finer split is added.
+        floor = min(8, limit // max(len(by_class), 1))
+        chosen = [s for ids in by_class.values() for s in rng.sample(ids, min(len(ids), floor))]
+
+        remaining = [s for s in subject_ids if s not in chosen]
+        budget = max(limit - len(chosen), 0)
+        if budget and remaining:
+            chosen += rng.sample(remaining, min(budget, len(remaining)))
+
+        subject_ids = chosen
+        subject_labels = [label_map[dataset.samples[subjects[s][0]][1]] for s in subject_ids]
 
     train_subs, temp_subs, train_y, temp_y = train_test_split(
         subject_ids, subject_labels, train_size=0.7, random_state=seed, stratify=subject_labels
