@@ -700,15 +700,36 @@ with tab_mri:
                 chosen_example = st.selectbox("Or select an example slice", example_names, key="mri_2d_example") if example_names else None
                 if not example_names:
                     st.caption("No example slices available (imagesoasis dataset not downloaded).")
+                run_2d = st.button("Run evaluation", key="mri_2d_run_btn")
 
             if uploaded is not None:
-                _run_mri_2d(uploaded.getvalue(), uploaded.name)
+                current_id_2d = ("upload", uploaded.name, uploaded.size)
             elif chosen_example is not None:
-                path = next(e["path"] for e in examples if e["name"] == chosen_example)
-                with open(path, "rb") as f:
-                    _run_mri_2d(f.read(), chosen_example)
+                current_id_2d = ("example", chosen_example)
             else:
-                st.caption("Upload a slice or select an example to begin.")
+                current_id_2d = None
+
+            if current_id_2d != st.session_state.get("mri_2d_input_id"):
+                st.session_state.mri_2d_confirmed = None
+                st.session_state.mri_2d_result = None
+
+            if run_2d:
+                if current_id_2d is None:
+                    st.warning("Upload a slice or select an example first.")
+                else:
+                    if uploaded is not None:
+                        st.session_state.mri_2d_confirmed = (uploaded.getvalue(), uploaded.name)
+                    else:
+                        path = next(e["path"] for e in examples if e["name"] == chosen_example)
+                        with open(path, "rb") as f:
+                            st.session_state.mri_2d_confirmed = (f.read(), chosen_example)
+                    st.session_state.mri_2d_input_id = current_id_2d
+
+            if st.session_state.get("mri_2d_confirmed"):
+                image_bytes, image_name = st.session_state.mri_2d_confirmed
+                _run_mri_2d(image_bytes, image_name)
+            else:
+                st.caption("Upload a slice or select an example, then click Run evaluation.")
 
         with sub3d:
             with st.container(border=True):
@@ -723,36 +744,56 @@ with tab_mri:
                 chosen_subject = st.selectbox("Or select an OASIS1_raw subject", subject_names, key="mri_3d_subject") if subject_names else None
                 if not subject_names:
                     st.caption("No OASIS1_raw subjects found on disk.")
+                run_3d = st.button("Run evaluation", key="mri_3d_run_btn")
 
             if uploaded_files:
-                import tempfile
-
-                names_lower = [f.name.lower() for f in uploaded_files]
-                if any(n.endswith((".hdr", ".img")) for n in names_lower):
-                    tmpdir = tempfile.mkdtemp()
-                    hdr_path = None
-                    for f in uploaded_files:
-                        dest = os.path.join(tmpdir, f.name)
-                        with open(dest, "wb") as out:
-                            out.write(f.getvalue())
-                        if f.name.lower().endswith(".hdr"):
-                            hdr_path = dest
-                    if hdr_path is None:
-                        st.warning("Upload both the .hdr and .img files together.")
-                    else:
-                        _run_mri_3d(hdr_path, uploaded_files[0].name)
-                else:
-                    f = uploaded_files[0]
-                    suffix = ".nii.gz" if f.name.lower().endswith(".nii.gz") else ".nii"
-                    with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
-                        tmp.write(f.getvalue())
-                        tmp_path = tmp.name
-                    _run_mri_3d(tmp_path, f.name)
+                current_id_3d = ("upload", tuple((f.name, f.size) for f in uploaded_files))
             elif chosen_subject is not None:
-                path = next(s["path"] for s in subjects if s["name"] == chosen_subject)
-                _run_mri_3d(path, chosen_subject)
+                current_id_3d = ("subject", chosen_subject)
             else:
-                st.caption("Upload a volume or select a subject to begin.")
+                current_id_3d = None
+
+            if current_id_3d != st.session_state.get("mri_3d_input_id"):
+                st.session_state.mri_3d_confirmed = None
+                st.session_state.mri_3d_result = None
+
+            if run_3d:
+                if current_id_3d is None:
+                    st.warning("Upload a volume or select a subject first.")
+                elif uploaded_files:
+                    import tempfile
+
+                    names_lower = [f.name.lower() for f in uploaded_files]
+                    if any(n.endswith((".hdr", ".img")) for n in names_lower):
+                        tmpdir = tempfile.mkdtemp()
+                        hdr_path = None
+                        for f in uploaded_files:
+                            dest = os.path.join(tmpdir, f.name)
+                            with open(dest, "wb") as out:
+                                out.write(f.getvalue())
+                            if f.name.lower().endswith(".hdr"):
+                                hdr_path = dest
+                        if hdr_path is None:
+                            st.warning("Upload both the .hdr and .img files together.")
+                        else:
+                            st.session_state.mri_3d_confirmed = (hdr_path, uploaded_files[0].name)
+                    else:
+                        f = uploaded_files[0]
+                        suffix = ".nii.gz" if f.name.lower().endswith(".nii.gz") else ".nii"
+                        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+                            tmp.write(f.getvalue())
+                            tmp_path = tmp.name
+                        st.session_state.mri_3d_confirmed = (tmp_path, f.name)
+                else:
+                    path = next(s["path"] for s in subjects if s["name"] == chosen_subject)
+                    st.session_state.mri_3d_confirmed = (path, chosen_subject)
+                st.session_state.mri_3d_input_id = current_id_3d
+
+            if st.session_state.get("mri_3d_confirmed"):
+                volume_path, volume_name = st.session_state.mri_3d_confirmed
+                _run_mri_3d(volume_path, volume_name)
+            else:
+                st.caption("Upload a volume or select a subject, then click Run evaluation.")
 
         with subcombined:
             _run_mri_combined()
@@ -847,10 +888,11 @@ with tab_eeg:
             gauge = go.Figure(go.Indicator(
                 mode="gauge+number", value=score * 100,
                 domain={"x": [0, 1], "y": [0, 1]},
+                number={"font": {"size": 36}},
                 gauge={"axis": {"range": [0, 100]}, "bar": {"color": SEVERITY_COLORS[level][0]}},
                 title={"text": "P(Alzheimer's pattern) (%)"},
             ))
-            gauge.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20))
+            gauge.update_layout(height=320, margin=dict(l=20, r=20, t=60, b=10))
             st.plotly_chart(gauge, width="stretch")
 
         explanation = st.session_state.get("eeg_explain")
@@ -900,8 +942,9 @@ with tab_eeg:
                 slowing = explanation["per_channel_bands"][:, 0] + explanation["per_channel_bands"][:, 1]
                 info = mne.create_info(explanation["ch_names"], sfreq=1.0, ch_types="eeg")
                 info.set_montage(mne.channels.make_standard_montage("standard_1020"), on_missing="ignore")
+                vlim = tuple(np.percentile(slowing, [5, 95]))  # ponytail: robust range so channel contrast isn't washed out by outliers
                 fig, (ax, cax) = plt.subplots(1, 2, figsize=(4, 3), gridspec_kw={"width_ratios": [1, 0.06]})
-                im, _ = mne.viz.plot_topomap(slowing, info, axes=ax, show=False, cmap="Reds", contours=4)
+                im, _ = mne.viz.plot_topomap(slowing, info, axes=ax, show=False, cmap="Reds", contours=4, vlim=vlim)
                 cbar = fig.colorbar(im, cax=cax)
                 cbar.set_label("Slow-wave power (a.u.)", color="white")
                 cbar.ax.yaxis.set_tick_params(color="white")

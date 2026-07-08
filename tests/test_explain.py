@@ -13,6 +13,7 @@ from alz.explain import (
     _format_recommendation,
     _parse_pubmed,
     _parse_trials,
+    _strip_code_fence,
     explain_mri,
 )
 
@@ -138,6 +139,21 @@ def test_explain_mri_fallback_coerces_nested_findings():
         explain_module._default_client = original
 
 
+def test_strip_code_fence_repairs_unescaped_inner_quotes():
+    """Regression: the LLM sometimes echoes a quoted phrase from the prompt (e.g. "EEG
+    slowing") inside the findings string without escaping it, which used to break
+    json.loads with 'Expecting property name enclosed in double quotes'."""
+    import json
+
+    raw = (
+        '{"findings": "Consistent with the classic "EEG slowing" pattern, '
+        'confidence 61%: further evaluation is recommended."}'
+    )
+    parsed = json.loads(_strip_code_fence(raw), strict=False)
+    assert parsed["findings"].startswith("Consistent with the classic")
+    assert '"EEG slowing"' in parsed["findings"]
+
+
 def test_coerce_findings_text_str_passthrough():
     assert _coerce_findings_text("Plain sentence.") == "Plain sentence."
 
@@ -165,6 +181,7 @@ if __name__ == "__main__":
     test_attention_summary_left()
     test_explain_mri_fallback_uses_text_llm()
     test_explain_mri_fallback_coerces_nested_findings()
+    test_strip_code_fence_repairs_unescaped_inner_quotes()
     test_coerce_findings_text_nested_dict()
     test_coerce_findings_text_str_passthrough()
     test_coerce_findings_text_dict()

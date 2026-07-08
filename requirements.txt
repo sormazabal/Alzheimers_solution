@@ -1,6 +1,6 @@
 streamlit
 plotly
-scikit-learn
+scikit-learn==1.7.2
 pandas
 joblib
 pytest

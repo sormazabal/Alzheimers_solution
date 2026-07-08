@@ -49,10 +49,55 @@ def _strip_code_fence(text: str) -> str:
                 t += ']'
         return t
 
+    def escape_unescaped_quotes(t: str) -> str:
+        """LLMs sometimes quote a phrase inside a JSON string value (e.g. the
+        prompt's own '"EEG slowing"') without escaping it, which makes the
+        parser think the string ended early. Re-scan and escape any '"' that
+        isn't actually a string terminator (i.e. not followed by `:`, `,`,
+        `}`, `]`, or end-of-text, after skipping whitespace)."""
+        out = []
+        in_string = False
+        i = 0
+        n = len(t)
+        while i < n:
+            char = t[i]
+            if in_string and char == '\\' and i + 1 < n:
+                out.append(char)
+                out.append(t[i + 1])
+                i += 2
+                continue
+            if char == '"':
+                if not in_string:
+                    in_string = True
+                    out.append(char)
+                else:
+                    j = i + 1
+                    while j < n and t[j] in ' \t\n\r':
+                        j += 1
+                    is_terminator = j >= n or t[j] in ',:}]'
+                    if is_terminator:
+                        in_string = False
+                        out.append(char)
+                    else:
+                        out.append('\\"')
+                i += 1
+                continue
+            out.append(char)
+            i += 1
+        return ''.join(out)
+
     # Try direct parsing first
     try:
         json.loads(text, strict=False)
         return text
+    except json.JSONDecodeError:
+        pass
+
+    # Try repairing unescaped inner quotes before anything else
+    try:
+        escaped = escape_unescaped_quotes(text)
+        json.loads(escaped, strict=False)
+        return escaped
     except json.JSONDecodeError:
         pass
 
@@ -72,6 +117,14 @@ def _strip_code_fence(text: str) -> str:
     try:
         json.loads(fixed_text, strict=False)
         return fixed_text
+    except json.JSONDecodeError:
+        pass
+
+    # Try combining both repairs: unescaped quotes and truncation
+    try:
+        fixed_and_escaped = fix_truncated_json(escape_unescaped_quotes(text))
+        json.loads(fixed_and_escaped, strict=False)
+        return fixed_and_escaped
     except json.JSONDecodeError:
         pass
 
