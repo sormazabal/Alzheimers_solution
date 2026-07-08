@@ -661,6 +661,8 @@ def mri_volume_figure(path, max_dim: int = 64, cam_volume=None):
         # not the isovalue -- "Gray" colored the 0.15 shell almost black.
         # Low opacity so the interior Grad-CAM ROI shows through the glass shell.
         colorscale=[[0, "#c8c8c8"], [1, "#f5f5f5"]], showscale=False, caps=caps,
+        # Flatter lighting so thin cropped-edge faces don't shade near-black.
+        lighting=dict(ambient=0.6, diffuse=0.4),
     )]
     if cam_volume is not None:
         traces.append(go.Isosurface(
