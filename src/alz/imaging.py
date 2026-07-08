@@ -626,8 +626,10 @@ def gradcam_volume_3d(path, model_path: str = DEFAULT_MODEL_PATH, max_dim: int =
 def mri_volume_figure(path, max_dim: int = 64, cam_volume=None):
     """Rotatable 3D volume rendering of a NIfTI MRI for the UI.
 
-    Returns a plotly go.Volume figure. Downsampled so the browser can render it
-    interactively -- go.Volume bogs down above ~10^5 voxels.
+    Returns a plotly go.Isosurface figure. Isosurface builds a static triangle
+    mesh once, so rotating it is a cheap GPU transform -- unlike go.Volume,
+    which ray-marches every isosurface again on each camera move and stalls
+    the browser for tens of seconds at this voxel count.
 
     cam_volume: optional np.ndarray (same shape as the downsampled anatomy grid, values
     in [0, 1]) from gradcam_volume_3d, rendered as a second semi-transparent hot-colorscale
@@ -651,16 +653,17 @@ def mri_volume_figure(path, max_dim: int = 64, cam_volume=None):
     vol = np.clip((vol - lo) / (hi - lo + 1e-8), 0, 1)
 
     x, y, z = np.mgrid[0:vol.shape[0], 0:vol.shape[1], 0:vol.shape[2]]
-    traces = [go.Volume(
+    caps = dict(x_show=False, y_show=False, z_show=False)
+    traces = [go.Isosurface(
         x=x.flatten(), y=y.flatten(), z=z.flatten(), value=vol.flatten(),
-        isomin=0.15, isomax=1.0, opacity=0.1, surface_count=17,
-        colorscale="Gray", showscale=False,
+        isomin=0.15, isomax=1.0, opacity=0.3, surface_count=2,
+        colorscale="Gray", showscale=False, caps=caps,
     )]
     if cam_volume is not None:
-        traces.append(go.Volume(
+        traces.append(go.Isosurface(
             x=x.flatten(), y=y.flatten(), z=z.flatten(), value=cam_volume.flatten(),
-            isomin=0.4, isomax=1.0, opacity=0.25, surface_count=12,
-            colorscale="Hot", showscale=False,
+            isomin=0.4, isomax=1.0, opacity=0.6, surface_count=2,
+            colorscale="Hot", showscale=False, caps=caps,
         ))
     fig = go.Figure(traces)
     fig.update_layout(

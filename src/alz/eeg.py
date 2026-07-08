@@ -141,7 +141,13 @@ def train_eeg(data_dir: str, out_path: str = DEFAULT_MODEL_PATH, participants_ts
 def _load_eeg_model(model_path: str):
     import joblib
 
-    return joblib.load(model_path)
+    pipeline = joblib.load(model_path)
+    clf = pipeline.named_steps.get("clf")
+    if clf is not None and not hasattr(clf, "multi_class"):
+        # ponytail: pipeline pickled under an older sklearn missing this attr;
+        # patch instead of retraining (no real EEG data available locally)
+        clf.multi_class = "auto"
+    return pipeline
 
 
 def predict_eeg_probs(recording, model_path: str = DEFAULT_MODEL_PATH) -> dict:

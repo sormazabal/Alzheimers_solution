@@ -447,11 +447,46 @@ def _oasis1_subjects() -> list[dict]:
     return [{"name": os.path.basename(p).split("_mpr")[0], "path": p} for p in paths]
 
 
+@st.cache_data(show_spinner=False)
+def _cached_predict_2d(image_bytes: bytes) -> dict:
+    from alz.imaging import predict_mri_probs
+    return predict_mri_probs(io.BytesIO(image_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_gradcam_2d(image_bytes: bytes) -> dict:
+    from alz.imaging import gradcam_mri
+    return gradcam_mri(io.BytesIO(image_bytes))
+
+
+@st.cache_data(show_spinner=False)
+def _cached_predict_3d(volume_path: str) -> dict:
+    from alz.imaging import predict_mri_probs_3d
+    return predict_mri_probs_3d(volume_path)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_gradcam_3d(volume_path: str) -> dict:
+    from alz.imaging import gradcam_mri_3d
+    return gradcam_mri_3d(volume_path)
+
+
+@st.cache_data(show_spinner=False)
+def _cached_gradcam_volume_3d(volume_path: str) -> dict:
+    from alz.imaging import gradcam_volume_3d
+    return gradcam_volume_3d(volume_path)
+
+
+# ponytail: unbounded cache; add max_entries=/ttl= if uploaded-temp-file churn grows memory.
+@st.cache_data(show_spinner=False)
+def _cached_volume_figure(volume_path: str, cam_volume=None):
+    from alz.imaging import mri_volume_figure
+    return mri_volume_figure(volume_path, cam_volume=cam_volume)
+
+
 def _run_mri_2d(image_bytes: bytes, image_name: str):
     """Runs the 2D MRI model and renders results. Shared by upload/example/history."""
-    from alz.imaging import gradcam_mri, predict_mri_probs
-
-    result = predict_mri_probs(io.BytesIO(image_bytes))
+    result = _cached_predict_2d(image_bytes)
     st.session_state.mri_selected = {"name": image_name, "bytes": image_bytes, "result": result}
 
     st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
@@ -477,7 +512,7 @@ def _run_mri_2d(image_bytes: bytes, image_name: str):
     with cam_col:
         try:
             with st.spinner("Computing Grad-CAM heatmap..."):
-                cam = gradcam_mri(io.BytesIO(image_bytes))
+                cam = _cached_gradcam_2d(image_bytes)
             st.image(cam["overlay"], caption="Grad-CAM: regions driving the prediction", width="stretch")
         except Exception:
             st.info("Heatmap unavailable for this image.")
@@ -505,9 +540,7 @@ def _run_mri_2d(image_bytes: bytes, image_name: str):
 
 def _run_mri_3d(volume_path: str, volume_name: str):
     """Runs the 3D MRI model and renders results. Shared by upload/OASIS1_raw picker."""
-    from alz.imaging import gradcam_mri_3d, gradcam_volume_3d, mri_volume_figure, predict_mri_probs_3d
-
-    result = predict_mri_probs_3d(volume_path)
+    result = _cached_predict_3d(volume_path)
     st.session_state.mri_selected = {"name": volume_name, "bytes": None, "result": result}
 
     st.caption(
@@ -541,7 +574,7 @@ def _run_mri_3d(volume_path: str, volume_name: str):
     with cam_col:
         try:
             with st.spinner("Computing Grad-CAM heatmap..."):
-                cam = gradcam_mri_3d(volume_path)
+                cam = _cached_gradcam_3d(volume_path)
             st.image(cam["overlay"], caption="Grad-CAM: representative slice", width="stretch")
         except Exception:
             st.info("Heatmap unavailable for this image.")
@@ -551,12 +584,12 @@ def _run_mri_3d(volume_path: str, volume_name: str):
     with st.expander("3D volume (rotable)"):
         try:
             with st.spinner("Computing volumetric Grad-CAM..."):
-                cam_volume = gradcam_volume_3d(volume_path)["cam_volume"]
+                cam_volume = _cached_gradcam_volume_3d(volume_path)["cam_volume"]
         except Exception:
             cam_volume = None
             st.info("Volumetric heatmap unavailable for this image.")
         with st.spinner("Rendering 3D volume..."):
-            st.plotly_chart(mri_volume_figure(volume_path, cam_volume=cam_volume), width="stretch")
+            st.plotly_chart(_cached_volume_figure(volume_path, cam_volume=cam_volume), width="stretch")
 
     with st.expander("What do these categories mean?"):
         st.markdown(
@@ -620,6 +653,7 @@ def _run_mri_combined():
         xaxis=dict(range=[0, 1], tickformat=".0%", title="P(Demented)"),
     )
     st.plotly_chart(bar, width="stretch")
+    st.caption("Bars show each pathway's independent P(Demented); they don't have to sum to 100%.")
 
     st.subheader("Radiology report summary")
     with st.container(border=True):
