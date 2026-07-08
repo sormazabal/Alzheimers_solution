@@ -311,6 +311,38 @@ def explain_mri(result: dict, image_bytes: bytes | None = None, cam=None) -> str
         return None
 
 
+def explain_eeg(result: dict, contributions: list[dict]) -> str | None:
+    """Plain-language readout of the EEG band-power classifier for a clinician, mirroring
+    explain_mri's graceful-degradation contract: returns None on any LLM failure.
+    """
+    import json
+
+    top = ", ".join(f"{c['feature']} ({c['direction']})" for c in contributions[:3])
+    prompt = (
+        f"An EEG-based dementia screening classifier (relative band power delta/theta/alpha/"
+        f"beta/gamma + slowing ratios, from resting-state eyes-closed recording) predicted "
+        f"'{result['label']}' with {result['score']:.1%} confidence. "
+        f"Top contributing features: {top or 'none'}. "
+        "Class meanings: 'Healthy' = no EEG signs of dementia-related slowing. "
+        "\"Alzheimer's pattern\" = increased low-frequency (delta/theta) power and reduced "
+        "high-frequency (alpha/beta) power, the classic 'EEG slowing' seen in AD. "
+        "In 2-3 sentences, comment on what the top contributing bands suggest physiologically "
+        "and connect them to the predicted label. Note the model's uncertainty where relevant, "
+        "and make clear this is a screening aid, not a diagnosis. You are a clinical decision-support "
+        "tool for a licensed clinician, not a chatbot talking to a patient -- always give your best "
+        "concrete, specific findings; never refuse or reply with a generic disclaimer like "
+        "\"I can't provide specific medical information\". "
+        'Respond as JSON: {"findings": "..."}'
+    )
+
+    try:
+        response = _default_client().complete([{"role": "user", "content": prompt}])
+        return _coerce_findings_text(json.loads(_strip_code_fence(response), strict=False)["findings"])
+    except Exception:
+        _log.exception("explain_eeg LLM call failed")
+        return None
+
+
 def explain_mri_combined(
     result_2d: dict, result_3d: dict, combined: dict, cam_2d=None, cam_3d=None
 ) -> str | None:
@@ -381,7 +413,11 @@ def _case_context(patient: dict, clinical_result: dict | None, mri_result: dict 
         lines.append("MRI dementia classifier: not yet assessed.")
 
     if eeg_result:
-        lines.append(f"EEG classification: {eeg_result['label']} ({eeg_result['score']:.0%} confidence).")
+        drivers = ", ".join(f"{d['feature']} ({d['direction']})" for d in eeg_result.get("drivers", [])[:3])
+        lines.append(
+            f"EEG classification: {eeg_result['label']} ({eeg_result['score']:.0%} confidence). "
+            f"Top band-power drivers: {drivers or 'none'}."
+        )
     else:
         lines.append("EEG classification: not yet assessed.")
 

@@ -4,6 +4,7 @@ __pycache__/
 venv/
 models/*.joblib
 models/*.pt
+models/*.npz
 .pytest_cache/
 .env
 data/

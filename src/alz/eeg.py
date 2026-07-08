@@ -45,14 +45,8 @@ def load_recording(path_or_file):
         os.unlink(tmp_path)
 
 
-def extract_features(raw) -> np.ndarray:
-    """Relative band power (delta..gamma, averaged across channels) + two slowing
-    ratios that summarize the classic AD EEG pattern (more low-frequency, less
-    high-frequency power). Returns a (7,) float array, ordered per FEATURE_NAMES.
-
-    ponytail: channel-averaged bands; go per-region (frontal/temporal/etc.) only
-    if accuracy stalls -- 65 subjects can't support many more features.
-    """
+def _band_power_per_channel(raw) -> tuple[np.ndarray, list[str]]:
+    """Relative band power (delta..gamma) per channel. Returns ((n_channels, 5), ch_names)."""
     import neurokit2 as nk
 
     sfreq = raw.info["sfreq"]
@@ -63,9 +57,21 @@ def extract_features(raw) -> np.ndarray:
     for ch in data:
         p = nk.signal_power(ch, frequency_band=band_freqs, sampling_rate=sfreq, method="welch")
         powers.append(p.iloc[0].to_numpy(dtype=float))
-    band_power = np.mean(powers, axis=0)  # (5,) delta..gamma
-    total = band_power.sum() + 1e-12
-    relative = band_power / total
+    powers = np.array(powers)  # (n_channels, 5)
+    totals = powers.sum(axis=1, keepdims=True) + 1e-12
+    return powers / totals, raw.info["ch_names"]
+
+
+def extract_features(raw) -> np.ndarray:
+    """Relative band power (delta..gamma, averaged across channels) + two slowing
+    ratios that summarize the classic AD EEG pattern (more low-frequency, less
+    high-frequency power). Returns a (7,) float array, ordered per FEATURE_NAMES.
+
+    ponytail: channel-averaged bands; go per-region (frontal/temporal/etc.) only
+    if accuracy stalls -- 65 subjects can't support many more features.
+    """
+    per_channel, _ = _band_power_per_channel(raw)
+    relative = per_channel.mean(axis=0)  # (5,) delta..gamma
 
     delta, theta, alpha, beta, gamma = relative
     theta_alpha_ratio = theta / (alpha + 1e-12)
@@ -134,7 +140,28 @@ def train_eeg(data_dir: str, out_path: str = DEFAULT_MODEL_PATH, participants_ts
     pipeline.fit(X, y)
     os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
     joblib.dump(pipeline, out_path)
+    np.savez(_cohort_path(out_path), X=X, y=y)  # sidecar for eeg_explanation's cohort comparison
     return metrics
+
+
+def _cohort_path(model_path: str) -> str:
+    return os.path.splitext(model_path)[0] + "_cohort.npz"
+
+
+@lru_cache(maxsize=None)
+def _load_cohort_norms(model_path: str) -> dict | None:
+    """Mean relative band power (delta..gamma) for AD vs healthy subjects in the training
+    set, for the panel's 'your patient vs cohort' comparison. None if no sidecar was saved
+    (e.g. a model trained before this existed)."""
+    path = _cohort_path(model_path)
+    if not os.path.exists(path):
+        return None
+    data = np.load(path)
+    X, y = data["X"], data["y"]
+    return {
+        "healthy_bands": X[y == 0, :5].mean(axis=0),
+        "ad_bands": X[y == 1, :5].mean(axis=0),
+    }
 
 
 @lru_cache(maxsize=None)  # ponytail: caches per model path; drop if paths change at runtime
@@ -166,6 +193,41 @@ def predict_eeg_probs(recording, model_path: str = DEFAULT_MODEL_PATH) -> dict:
         "probs": {LABELS[i]: float(p) for i, p in enumerate(proba)},
         "label": LABELS[label_idx],
         "score": float(proba[1]),
+    }
+
+
+def eeg_explanation(recording, model_path: str = DEFAULT_MODEL_PATH) -> dict:
+    """Everything the EEG panel needs to explain a score to a clinician, in one Welch pass:
+    per-feature contributions (scaled_feature * logistic-regression coef -- exact for a linear
+    model, no SHAP needed), the patient's band-power spectrum, cohort norms if available, and
+    per-channel bands for a scalp topomap.
+    """
+    pipeline = _load_eeg_model(model_path)
+    raw = recording if hasattr(recording, "get_data") else load_recording(recording)
+
+    per_channel, ch_names = _band_power_per_channel(raw)
+    relative = per_channel.mean(axis=0)
+    delta, theta, alpha, beta, gamma = relative
+    theta_alpha_ratio = theta / (alpha + 1e-12)
+    slowing_ratio = (delta + theta) / (alpha + beta + 1e-12)
+    features = np.concatenate([relative, [theta_alpha_ratio, slowing_ratio]]).reshape(1, -1)
+
+    scaler = pipeline.named_steps["scale"]
+    clf = pipeline.named_steps["clf"]
+    scaled = scaler.transform(features)[0]
+    contributions = scaled * clf.coef_[0]
+    ranked = sorted(zip(FEATURE_NAMES, contributions), key=lambda kv: abs(kv[1]), reverse=True)
+
+    cohort = _load_cohort_norms(model_path)
+    return {
+        "contributions": [
+            {"feature": name, "direction": "raises risk" if c > 0 else "lowers risk", "contribution": float(c)}
+            for name, c in ranked
+        ],
+        "relative_bands": relative.tolist(),
+        "cohort_bands": cohort,  # {'healthy_bands', 'ad_bands'} or None
+        "per_channel_bands": per_channel,  # (n_channels, 5) delta..gamma, for a topomap
+        "ch_names": ch_names,
     }
 
 

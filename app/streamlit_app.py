@@ -16,7 +16,7 @@ import streamlit as st
 
 from alz import predict
 from alz.data import FEATURE_META, load_population
-from alz.explain import chat_about_case, evidence_for_case, explain_mri, synthesize_summary
+from alz.explain import chat_about_case, evidence_for_case, explain_eeg, explain_mri, synthesize_summary
 from alz.fusion import integrated_score
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
@@ -35,6 +35,21 @@ SEVERITY_COLORS = {
     "mild": ("#F5E27E", "#3A3000"),
     "high": ("#E12A26", "#FFFFFF"),
 }
+
+# Display name + hover explanation for each EEG feature (alz.eeg.FEATURE_NAMES).
+EEG_FEATURE_INFO = {
+    "delta": ("Delta power", "0.5-4 Hz power. Elevated delta is part of the 'EEG slowing' pattern seen in Alzheimer's."),
+    "theta": ("Theta power", "4-8 Hz power. Elevated theta is part of the 'EEG slowing' pattern seen in Alzheimer's."),
+    "alpha": ("Alpha power", "8-13 Hz power. Reduced alpha (relative to delta/theta) is associated with Alzheimer's."),
+    "beta": ("Beta power", "13-25 Hz power. Reduced beta is associated with Alzheimer's."),
+    "gamma": ("Gamma power", "25-45 Hz power. Least specific band for dementia screening."),
+    "theta_alpha_ratio": ("Theta / Alpha ratio", "Slow-to-fast power ratio. Higher values mean more EEG slowing, a strong Alzheimer's indicator."),
+    "slowing_ratio": ("Slowing ratio", "(delta+theta) / (alpha+beta), an overall EEG-slowing index. Higher values are more consistent with Alzheimer's."),
+}
+
+
+def eeg_feature_display(name: str) -> tuple[str, str]:
+    return EEG_FEATURE_INFO.get(name, (name.replace("_", " ").title(), ""))
 
 
 def chip(label: str, level: str) -> str:
@@ -780,7 +795,7 @@ with tab_eeg:
 
     if run:
         try:
-            from alz.eeg import load_recording, predict_eeg_probs
+            from alz.eeg import eeg_explanation, load_recording, predict_eeg_probs
         except ImportError:
             st.warning("EEG dependencies not installed — see requirements-eeg.txt")
         else:
@@ -798,8 +813,12 @@ with tab_eeg:
                 with st.spinner("Extracting band-power features and scoring..."):
                     raw = load_recording(recording_source)
                     result = predict_eeg_probs(raw)
+                    explanation = eeg_explanation(raw)
                 level = band_for_score(result["score"])[1]
-                st.session_state.eeg_result = {**result, "level": level, "recording": recording_name}
+                st.session_state.eeg_result = {
+                    **result, "level": level, "recording": recording_name, "drivers": explanation["contributions"],
+                }
+                st.session_state.eeg_explain = explanation
                 st.session_state.eeg_raw_signal = raw.get_data()[:6, : int(raw.info["sfreq"] * 4)]
                 st.session_state.eeg_raw_sfreq = raw.info["sfreq"]
                 st.session_state.eeg_raw_channels = raw.info["ch_names"][:6]
@@ -833,3 +852,67 @@ with tab_eeg:
             ))
             gauge.update_layout(height=280, margin=dict(l=20, r=20, t=60, b=20))
             st.plotly_chart(gauge, width="stretch")
+
+        explanation = st.session_state.get("eeg_explain")
+        if explanation:
+            from alz.eeg import BANDS
+
+            st.subheader("Why this score")
+            c1, c2 = st.columns(2)
+
+            with c1:
+                st.caption("Band contribution to score (hover a bar for details)")
+                drivers = explanation["contributions"]
+                raw_names = [d["feature"] for d in drivers][::-1]
+                display = [eeg_feature_display(n) for n in raw_names]
+                names = [d[0] for d in display]
+                tooltips = [d[1] for d in display]
+                values = [d["contribution"] for d in drivers][::-1]
+                colors = [SEVERITY_COLORS["high"][0] if v > 0 else SEVERITY_COLORS["normal"][0] for v in values]
+                bar = go.Figure(go.Bar(
+                    x=values, y=names, orientation="h", marker_color=colors,
+                    customdata=tooltips,
+                    hovertemplate="<b>%{y}</b><br>%{customdata}<br>Contribution: %{x:.3f}<extra></extra>",
+                ))
+                bar.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), xaxis_title="Contribution to log-odds")
+                st.plotly_chart(bar, width="stretch")
+
+            with c2:
+                st.caption("Relative band power vs cohort")
+                band_names = [name.title() for name, _, _ in BANDS]
+                spectrum = go.Figure()
+                spectrum.add_trace(go.Bar(x=band_names, y=explanation["relative_bands"], name="This patient"))
+                cohort = explanation["cohort_bands"]
+                if cohort:
+                    spectrum.add_trace(go.Bar(x=band_names, y=cohort["healthy_bands"], name="Healthy mean"))
+                    spectrum.add_trace(go.Bar(x=band_names, y=cohort["ad_bands"], name="AD mean"))
+                spectrum.update_layout(height=280, margin=dict(l=10, r=10, t=10, b=10), barmode="group", yaxis_title="Relative power")
+                st.plotly_chart(spectrum, width="stretch")
+
+            st.caption(
+                "Scalp topography: redder regions have more slow-wave (delta + theta) power, "
+                "the 'EEG slowing' pattern associated with Alzheimer's. See scale at right."
+            )
+            try:
+                import matplotlib.pyplot as plt
+                import mne
+
+                slowing = explanation["per_channel_bands"][:, 0] + explanation["per_channel_bands"][:, 1]
+                info = mne.create_info(explanation["ch_names"], sfreq=1.0, ch_types="eeg")
+                info.set_montage(mne.channels.make_standard_montage("standard_1020"), on_missing="ignore")
+                fig, (ax, cax) = plt.subplots(1, 2, figsize=(4, 3), gridspec_kw={"width_ratios": [1, 0.06]})
+                im, _ = mne.viz.plot_topomap(slowing, info, axes=ax, show=False, cmap="Reds", contours=4)
+                cbar = fig.colorbar(im, cax=cax)
+                cbar.set_label("Slow-wave power (a.u.)", color="white")
+                cbar.ax.yaxis.set_tick_params(color="white")
+                plt.setp(cbar.ax.get_yticklabels(), color="white")
+                fig.patch.set_alpha(0)
+                ax.set_facecolor("none")
+                st.pyplot(fig, width="content")
+            except Exception:
+                st.caption("Topomap unavailable for this recording's channel layout.")
+
+            with st.spinner("Drafting clinical readout..."):
+                readout = explain_eeg(eeg, explanation["contributions"])
+            if readout:
+                st.info(readout)

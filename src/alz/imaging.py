@@ -656,14 +656,17 @@ def mri_volume_figure(path, max_dim: int = 64, cam_volume=None):
     caps = dict(x_show=False, y_show=False, z_show=False)
     traces = [go.Isosurface(
         x=x.flatten(), y=y.flatten(), z=z.flatten(), value=vol.flatten(),
-        isomin=0.15, isomax=1.0, opacity=0.3, surface_count=2,
-        colorscale="Gray", showscale=False, caps=caps,
+        isomin=0.15, isomax=1.0, opacity=0.2, surface_count=2,
+        # ponytail: flat light colorscale so the shell reads via lighting/normals,
+        # not the isovalue -- "Gray" colored the 0.15 shell almost black.
+        # Low opacity so the interior Grad-CAM ROI shows through the glass shell.
+        colorscale=[[0, "#c8c8c8"], [1, "#f5f5f5"]], showscale=False, caps=caps,
     )]
     if cam_volume is not None:
         traces.append(go.Isosurface(
             x=x.flatten(), y=y.flatten(), z=z.flatten(), value=cam_volume.flatten(),
-            isomin=0.4, isomax=1.0, opacity=0.6, surface_count=2,
-            colorscale="Hot", showscale=False, caps=caps,
+            isomin=0.35, isomax=1.0, opacity=0.9, surface_count=3,
+            colorscale="Hot", cmin=0.4, cmax=1.0, showscale=False, caps=caps,
         ))
     fig = go.Figure(traces)
     fig.update_layout(
