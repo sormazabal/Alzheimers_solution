@@ -548,7 +548,7 @@ def _run_mri_3d(volume_path: str, volume_name: str):
 
     st.session_state.mri_3d_result = {"result": result, "cam": (cam or {}).get("cam")}
 
-    with st.expander("3D volume (rotatable)"):
+    with st.expander("3D volume (rotable)"):
         try:
             with st.spinner("Computing volumetric Grad-CAM..."):
                 cam_volume = gradcam_volume_3d(volume_path)["cam_volume"]
