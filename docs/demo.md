@@ -51,12 +51,70 @@ ResNet18 severity classifier returns:
   vision-LLM read of the scan, or a text fallback from the Grad-CAM attention pattern)
   describing hippocampal volumes and lateral ventricle sizes, explicitly framed as a screening aid.
 
+## Scene 2b — 3D MRI volume view (insert after Step 2, before Step 3)
+
+**Narration:** "The 2D slice is a quick read, but a single slice can miss where atrophy actually
+sits. Here's the same scan as a full 3D volume, so we can see the model's attention across
+the whole brain, not just one cut."
+
+- Click into the **"3D volume"** sub-tab, next to "2D slice."
+- Upload a `.nii` / `.nii.gz` volume (or a matching `.hdr` + `.img` pair), or pick a bundled
+  OASIS1 example subject from the dropdown, then click **Run evaluation**.
+- A caption flags this as **v1**: the existing 2D model is applied to central axial slices and
+  pooled, not a separately validated volumetric classifier — say this out loud on camera so it
+  doesn't read as an overclaim.
+- Same prediction card and probability bar as the 2D tab, plus the single central axial slice
+  with the highest predicted risk shown side-by-side with its Grad-CAM overlay.
+- Open the **"3D volume (rotable)"** expander — the headline shot for this scene: an
+  interactive, mouse-rotatable render of the whole brain as a translucent gray shell, with a
+  hot-colored Grad-CAM activation region glowing inside it. Rotate it on camera for a few
+  seconds before moving on.
+- Closes with the same radiology-style FINDINGS paragraph as the 2D tab.
+
+## Scene 2c — MRI 2D + 3D combined confirmation (insert immediately after Scene 2b, before Step 3)
+
+**Narration:** "Neither view has to stand alone. Once we've run both the slice and the volume,
+the app cross-checks them against each other and gives one combined confirmation."
+
+- Requires both the 2D and 3D analyses to have already been run in this session — the tab
+  prompts "Run both the 2D slice and 3D volume analyses first" otherwise, so record Scene 2b
+  before this one.
+- Click into the third sub-tab, **"2D + 3D combined."**
+- Shows a **"Combined dementia confirmation"** metric with confidence, and an explicit note on
+  whether the 2D and 3D pathways agree or disagree on the predicted label.
+- A 3-bar chart compares P(Demented) for 2D, 3D, and Combined side by side — a clean visual
+  for showing the two pathways converging (or flagging a disagreement worth a second look).
+- Closes with a combined radiology report summary, same FINDINGS format as the other MRI
+  scenes.
+
 ## Step 3 — EEG confirmation (EEG records tab)
 
 The clinician selects or uploads an EEG recording. The app extracts band-power features
 (the classic AD-associated "slowing" — more delta/theta, less alpha/beta) and shows:
 - A **signal viewer** of the raw channels.
 - A **gauge** for P(Alzheimer's pattern) with a Healthy/AD-pattern label. This gauge visualizes the model's confidence (from 0% to 100%) that the patient's EEG band-power features align with patterns typically associated with Alzheimer's Disease. A high percentage triggers the "Alzheimer's pattern" evaluation result, indicating significant slowing, while a lower score indicates a "Healthy pattern".
+
+## Scene 3b — EEG "Why this score" explainability panel (insert immediately after Step 3, same tab)
+
+**Narration:** "The gauge gives a number, but a clinician needs to know what's driving it. This
+panel breaks the score down by EEG band, compares the patient against a healthy and an AD
+cohort, and maps where on the scalp the slowing is strongest."
+
+- Appears automatically under **"Why this score"** as soon as the evaluation finishes — no
+  extra click needed, so this scene continues straight out of Step 3's gauge shot.
+- **Band contribution chart** — horizontal bars per EEG feature (delta, theta, alpha, beta,
+  gamma power, plus the theta/alpha and slowing ratios), colored red where a band raises risk
+  and green where it lowers it. Hovering a bar shows a plain-English tooltip and the exact
+  contribution value — worth a slow hover-over on camera to show the tooltips.
+- **Relative band power vs. cohort chart** next to it — this patient's band power plotted
+  against a healthy-cohort mean and an AD-cohort mean, so the deviation is visible at a glance.
+- **Scalp topography map** — a heatmap of slow-wave (delta + theta) power across the scalp,
+  redder where slowing is strongest, with a colorbar. Another strong visual moment for the
+  recording.
+- Closes with a short LLM-drafted clinical readout tying the top contributing bands to the
+  predicted label in plain language.
+- Narration should land on: this turns the gauge number into something a clinician can audit,
+  not a black-box score.
 
 ## Step 4 — Overview: the integrated picture
 
@@ -83,9 +141,13 @@ The Overview tab pulls every completed assessment together:
   bespoke glue per surface.
 - **Multi-modal fusion, delivered.** Tabular + MRI + EEG fused into one prognosis is the
   differentiator both `PRESENTATION.md` and `README.md` flagged as future work — it's
-  now implemented, not aspirational.
+  now implemented, not aspirational. The MRI pathway itself is now cross-checked internally
+  too: a 2D slice read and a full 3D volumetric read are fused into one combined confirmation,
+  not just tabular + MRI + EEG.
 - **Explainable by construction.** Coefficient-based drivers, Grad-CAM overlays, and
   citation-grounded recommendations mean every AI output traces back to something a
-  clinician can inspect — no opaque black-box score.
+  clinician can inspect — no opaque black-box score. The EEG band-contribution chart and
+  scalp topography map extend this to the EEG pathway, turning a single confidence number
+  into an auditable, per-band breakdown.
 - **Runs on commodity infrastructure.** No paid LLM/cloud APIs required for the core
   scoring; models run locally on CPU (GPU used automatically if present).

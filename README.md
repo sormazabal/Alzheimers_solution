@@ -47,6 +47,7 @@ context.
 
 ```bash
 uv venv
+.venv\Scripts\activate       # Windows; use `source .venv/bin/activate` on macOS/Linux
 uv pip install -r requirements.txt
 uv run python train.py                          # trains models/model.joblib on data/oasis_longitudinal.csv
 uv run pytest tests/test_smoke.py               # train -> predict roundtrip check
