@@ -151,3 +151,20 @@ The Overview tab pulls every completed assessment together:
   into an auditable, per-band breakdown.
 - **Runs on commodity infrastructure.** No paid LLM/cloud APIs required for the core
   scoring; models run locally on CPU (GPU used automatically if present).
+
+## Publishing to the company repo
+
+`docs/` and `.claude/` stay in this personal repo only; they should not reach the company
+repo. One-time setup, then a push:
+
+```bash
+git remote add company <company-repo-url>     # once
+git checkout -b company-publish master
+git rm -r --cached docs .claude
+git commit -m "chore: strip personal-only dirs for company repo"
+git push company company-publish:master --force
+git checkout master && git branch -D company-publish
+```
+
+`master` (and `origin`) keep `docs/` and `.claude/` untouched; only the throwaway
+`company-publish` branch drops them before pushing.
