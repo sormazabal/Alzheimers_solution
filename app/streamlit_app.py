@@ -5,6 +5,7 @@ st.session_state with a seeded demo patient (ponytail: swap for a real fetch whe
 a patient store exists).
 """
 import io
+import json
 import os
 import sys
 
@@ -15,10 +16,10 @@ import plotly.graph_objects as go
 import plotly.io as pio
 import streamlit as st
 
-from alz import predict
+from alz import db, predict
 from alz.data import FEATURE_META, load_population
 from alz.explain import chat_about_case, evidence_for_case, explain_eeg, explain_mri, synthesize_summary
-from alz.fusion import integrated_score
+from alz.fusion import combine_mri, integrated_score
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
 
@@ -123,6 +124,50 @@ st.session_state.setdefault("mmse_history", [29, 28])  # demo prior-visit MMSE s
 st.session_state.setdefault("notes", "")
 st.session_state.setdefault("evidence", None)
 
+
+@st.cache_resource
+def _db_connect():
+    return db.connect()
+
+
+def _load_patient_into_session(patient_id: str, force: bool = False):
+    """Runs (or fetches cached) all-modality inference for patient_id and rehydrates
+    the same session_state keys the individual pages already read, so they render
+    the cached result exactly as if the user had run each tab by hand."""
+    conn = _db_connect()
+    out = db.run_patient(conn, patient_id, force=force)
+    ehr = json.loads(conn.execute("SELECT ehr_json FROM patients WHERE patient_id = ?", (patient_id,)).fetchone()[0])
+
+    st.session_state.patient["id"] = patient_id
+    st.session_state.clinical_record = ehr
+    st.session_state.clinical_result = out["clinical"] if out.get("clinical") and "error" not in out["clinical"] else None
+
+    mri_2d = out.get("mri_2d") if out.get("mri_2d") and "error" not in out["mri_2d"] else None
+    mri_3d = out.get("mri_3d") if out.get("mri_3d") and "error" not in out["mri_3d"] else None
+    st.session_state.mri_2d_result = {"result": mri_2d, "cam": None} if mri_2d else None
+    st.session_state.mri_3d_result = {"result": mri_3d, "cam": None} if mri_3d else None
+    if mri_2d and mri_3d:
+        combined = combine_mri(mri_2d, mri_3d)
+        st.session_state.mri_selected = {"name": f"{patient_id} (2D + 3D combined)", "bytes": None, "result": combined}
+    elif mri_3d:
+        st.session_state.mri_selected = {"name": f"{patient_id} (3D)", "bytes": None, "result": mri_3d}
+    elif mri_2d:
+        st.session_state.mri_selected = {"name": f"{patient_id} (2D)", "bytes": None, "result": mri_2d}
+    else:
+        st.session_state.mri_selected = None
+
+    eeg = out.get("eeg") if out.get("eeg") and "error" not in out["eeg"] else None
+    if eeg:
+        level = band_for_score(eeg["score"])[1]
+        st.session_state.eeg_result = {**eeg, "level": level, "recording": patient_id, "drivers": []}
+    else:
+        st.session_state.eeg_result = None
+    st.session_state.eeg_explain = None  # batch run skips the on-demand band/topomap explanation
+
+    errors = [f"{m}: {r['error']}" for m, r in out.items() if isinstance(r, dict) and "error" in r]
+    if errors:
+        st.warning("Some modalities failed for this patient: " + "; ".join(errors))
+
 """
 # :material/neurology: Alzheimer's Early-Risk Triage
 """
@@ -134,14 +179,28 @@ st.session_state.setdefault("evidence", None)
 with st.sidebar:
     st.subheader("Patient")
     patient = st.session_state.patient
-    with st.expander("Patient details", expanded=True):
-        patient["name"] = st.text_input("Name", patient["name"])
-        patient["id"] = st.text_input("Patient ID", patient["id"])
-        c1, c2 = st.columns(2)
-        patient["dob"] = c1.text_input("DOB", patient["dob"])
-        patient["sex"] = c2.selectbox("Sex", ["F", "M"], index=["F", "M"].index(patient["sex"]))
-        patient["history"] = st.text_area("Medical history", patient["history"], height=80)
-    st.caption(f"{patient['name']} · {patient['sex']} · DOB {patient['dob']} · ID {patient['id']}")
+    if os.path.exists(db.OASIS2_CSV):
+        conn = _db_connect()
+        options = [p["patient_id"] for p in db.list_patients(conn)]
+        picked = st.selectbox("Patient (linked EHR + MRI + EEG)", options, key="picked_patient_id")
+        st.caption(
+            "MRI/EEG are demographically matched, not this person's real scans -- "
+            "the three source datasets share no real patients (see fusion-methodology.md)."
+        )
+        if st.button(":material/play_arrow: Run all modalities", width="stretch"):
+            with st.spinner(f"Running clinical + MRI + EEG for {picked}..."):
+                _load_patient_into_session(picked)
+            st.rerun()
+        patient["id"] = picked
+    else:
+        with st.expander("Patient details", expanded=True):
+            patient["name"] = st.text_input("Name", patient["name"])
+            patient["id"] = st.text_input("Patient ID", patient["id"])
+            c1, c2 = st.columns(2)
+            patient["dob"] = c1.text_input("DOB", patient["dob"])
+            patient["sex"] = c2.selectbox("Sex", ["F", "M"], index=["F", "M"].index(patient["sex"]))
+            patient["history"] = st.text_area("Medical history", patient["history"], height=80)
+        st.caption(f"{patient['name']} · {patient['sex']} · DOB {patient['dob']} · ID {patient['id']}")
 
     st.divider()
     fused_sidebar = integrated_score(
@@ -962,12 +1021,79 @@ def page_eeg():
                 st.info(readout)
 
 
-pg = st.navigation({
+# ---------------------------------------------------------------------------
+# Page: Cohort (group-level batch inference)
+# ---------------------------------------------------------------------------
+def page_cohort():
+    import pandas as pd
+    import plotly.express as px
+
+    st.title("Cohort")
+    st.caption("Run all-modality inference across many patients at once; results are cached in data/patients.db.")
+
+    conn = _db_connect()
+    all_ids = [p["patient_id"] for p in db.list_patients(conn)]
+
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        select_all = st.checkbox("Select all")
+        chosen = st.multiselect("Patients", all_ids, default=all_ids if select_all else [])
+    with c2:
+        force = st.checkbox("Re-run cached", help="Recompute even patients that already have a cached result.")
+
+    if st.button(":material/play_arrow: Run inference", disabled=not chosen):
+        progress = st.progress(0.0, text="Starting...")
+        for i, pid in enumerate(chosen):
+            progress.progress((i + 1) / len(chosen), text=f"{pid} ({i + 1}/{len(chosen)})")
+            db.run_patient(conn, pid, force=force)
+        progress.empty()
+        st.success(f"Ran inference for {len(chosen)} patient(s).")
+
+    df = db.cohort_frame(conn)
+    scored = df["fusion_score"].notna().sum()
+    st.caption(f"{scored} of {len(df)} patients have a cached fusion score.")
+
+    st.dataframe(df, width="stretch")
+    st.download_button("Download CSV", df.to_csv(index=False), "cohort_results.csv", "text/csv")
+
+    have_fusion = df.dropna(subset=["fusion_score"])
+    if have_fusion.empty:
+        st.info("Run inference above to populate the charts.")
+        return
+
+    st.subheader("Fusion score distribution by ground-truth group")
+    st.plotly_chart(px.histogram(have_fusion, x="fusion_score", color="group_label", barmode="overlay", nbins=20), width="stretch")
+
+    st.subheader("Fusion prediction vs ground-truth group")
+    truth = have_fusion["group_label"].apply(lambda g: "Demented" if g in ("Demented", "Converted") else "Nondemented")
+    predicted = have_fusion["fusion_label"].map({True: "Demented", False: "Nondemented"})
+    confusion = pd.crosstab(truth, predicted).reindex(index=["Nondemented", "Demented"], columns=["Nondemented", "Demented"], fill_value=0)
+    st.plotly_chart(px.imshow(confusion, text_auto=True, labels=dict(x="Predicted", y="Actual", color="Count")), width="stretch")
+
+    st.subheader("Where does clinical disagree with the fused score?")
+    st.plotly_chart(
+        px.scatter(have_fusion, x="clinical_score", y="fusion_score", color="group_label", hover_data=["patient_id"]),
+        width="stretch",
+    )
+
+    st.divider()
+    if st.button("Rebuild patient database"):
+        with st.spinner("Rebuilding from source datasets..."):
+            n = db.build(conn)
+        st.success(f"Rebuilt: {n} patients.")
+        st.rerun()
+
+
+pages = {
     "Assessments": [
         st.Page(page_clinical, title="Clinical risk", icon=":material/description:"),
         st.Page(page_mri, title="MRI records", icon=":material/neurology:"),
         st.Page(page_eeg, title="EEG records", icon=":material/monitor_heart:"),
     ],
     "Summary": [st.Page(page_overview, title="Overview", icon=":material/summarize:")],
-})
+}
+if os.path.exists(db.DB_PATH):
+    pages["Cohort"] = [st.Page(page_cohort, title="Cohort", icon=":material/groups:")]
+
+pg = st.navigation(pages)
 pg.run()

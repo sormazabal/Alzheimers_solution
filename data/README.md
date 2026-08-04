@@ -49,6 +49,14 @@ where `Group` is `A` (AD), `F` (FTD), or `C` (healthy control).
 source data -- no script in this repo currently reads it; it's kept for reference and
 future MRI work beyond the Kaggle `imagesoasis` slices used today.
 
+## Patient database
+
+`patients.db` (SQLite, gitignored, auto-built by [src/alz/db.py](../src/alz/db.py))
+pairs each clinical subject above with an OASIS-1 MRI subject and a ds004504 EEG
+subject of the same diagnosis class (demented vs not) and the nearest age/sex,
+since none of these datasets share real subjects. See
+[fusion-methodology.md](../fusion-methodology.md).
+
 ## Expected columns
 
 `Subject ID, MRI ID, Group, Visit, MR Delay, M/F, Hand, Age, EDUC, SES, MMSE, CDR, eTIV, nWBV, ASF`

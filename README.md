@@ -95,6 +95,19 @@ MRI, EEG, and fusion are reachable the same way for programmatic use; see
 Wrapping this in a FastAPI service is a small, deliberately deferred next step
 (see [app/api.py](app/api.py) for the current stub).
 
+## Patient database
+
+`data/patients.db` (SQLite, auto-built on first app launch) links each OASIS-2
+clinical subject to an MRI (OASIS-1) and an EEG (ds004504) subject and caches
+all-modality inference results so a patient only needs to be scored once. The
+three source datasets share no real patients, so the link is a demographically
+matched synthetic pairing, not a real co-registered patient — see
+[fusion-methodology.md](fusion-methodology.md) and [src/alz/db.py](src/alz/db.py).
+The app's sidebar picks a patient and runs all modalities at once; the "Cohort"
+page runs a whole group and shows a sortable results table + charts. Delete
+`data/patients.db` (or use the "Rebuild patient database" button) to re-link
+against updated source data.
+
 ## Repo structure
 
 ```text
