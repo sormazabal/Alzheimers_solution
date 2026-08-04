@@ -12,6 +12,7 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
 import numpy as np
 import plotly.graph_objects as go
+import plotly.io as pio
 import streamlit as st
 
 from alz import predict
@@ -20,21 +21,25 @@ from alz.explain import chat_about_case, evidence_for_case, explain_eeg, explain
 from alz.fusion import integrated_score
 
 st.set_page_config(page_title="Alzheimer's Early-Risk Triage", page_icon="🧠", layout="wide")
-st.logo(os.path.join(os.path.dirname(__file__), "..", "TAO_logo.png"), size="large")
-st.markdown(
-    "<style>div[data-testid='stTabs'] button[role='tab']{padding:8px 18px;} "
-    "div[data-testid='stMetricValue']{font-size:1.4rem;}</style>",
-    unsafe_allow_html=True,
-)
 
 # ---------------------------------------------------------------------------
-# Shared severity coding (green/amber/red) used across every tab + sidebar.
+# Shared severity coding (mint/amber/red-on-white) used across every page + sidebar.
 # ---------------------------------------------------------------------------
 SEVERITY_COLORS = {
-    "normal": ("#4CAF3D", "#FFFFFF"),
-    "mild": ("#F5E27E", "#3A3000"),
-    "high": ("#E12A26", "#FFFFFF"),
+    "normal": ("#D8F3EC", "#0B5B4C"),
+    "mild": ("#FDF0CC", "#6B4E00"),
+    "high": ("#FBE0DE", "#8C1D18"),
 }
+
+# One Plotly template for every chart -- avoids retyping hex colors per chart.
+pio.templates["triage"] = go.layout.Template(layout=go.Layout(
+    paper_bgcolor="#FFFFFF", plot_bgcolor="#FFFFFF",
+    font=dict(color="#0E2A33"),
+    xaxis=dict(gridcolor="#E1E7E9", zerolinecolor="#E1E7E9"),
+    yaxis=dict(gridcolor="#E1E7E9", zerolinecolor="#E1E7E9"),
+    colorway=["#0FA3A3", "#4A6B73", "#E7A93B", "#C0473F"],
+))
+pio.templates.default = "triage"
 
 # Display name + hover explanation for each EEG feature (alz.eeg.FEATURE_NAMES).
 EEG_FEATURE_INFO = {
@@ -167,14 +172,10 @@ with st.sidebar:
     else:
         st.caption("EEG: not yet assessed")
 
-tab_clinical, tab_mri, tab_eeg, tab_overview = st.tabs(
-    ["Clinical risk", "MRI records", "EEG records", "Overview"]
-)
-
 # ---------------------------------------------------------------------------
-# Tab 4: Overview
+# Page: Overview
 # ---------------------------------------------------------------------------
-with tab_overview:
+def page_overview():
     st.subheader("Assessment summary")
 
     fused = integrated_score(
@@ -305,9 +306,9 @@ with tab_overview:
         st.rerun()
 
 # ---------------------------------------------------------------------------
-# Tab 2: Clinical risk
+# Page: Clinical risk
 # ---------------------------------------------------------------------------
-with tab_clinical:
+def page_clinical():
     with st.form("patient_form"):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -373,7 +374,7 @@ with tab_clinical:
                     st.metric("MMSE vs. last visit", record["MMSE"], record["MMSE"] - prior)
                 spark = go.Figure(go.Scatter(
                     y=st.session_state.mmse_history + [record["MMSE"]],
-                    mode="lines+markers", line_color="#4C8BF5",
+                    mode="lines+markers", line_color="#0FA3A3",
                 ))
                 spark.update_layout(height=100, margin=dict(l=10, r=10, t=10, b=10), yaxis_title="MMSE")
                 st.plotly_chart(spark, width="stretch")
@@ -413,19 +414,19 @@ with tab_clinical:
                     fig = go.Figure()
                     if is_sex:
                         # ponytail: binary percentile is meaningless -- show Age split by sex instead
-                        fig.add_trace(go.Histogram(x=population.loc[population["Sex_M"] == 1, "Age"], name="Male", marker_color="#636EFA", opacity=0.6))
-                        fig.add_trace(go.Histogram(x=population.loc[population["Sex_M"] == 0, "Age"], name="Female", marker_color="#EF553B", opacity=0.6))
+                        fig.add_trace(go.Histogram(x=population.loc[population["Sex_M"] == 1, "Age"], name="Male", marker_color="#0FA3A3", opacity=0.6))
+                        fig.add_trace(go.Histogram(x=population.loc[population["Sex_M"] == 0, "Age"], name="Female", marker_color="#E7A93B", opacity=0.6))
                         fig.update_layout(barmode="overlay")
-                        fig.add_vline(x=record["Age"], line_color="crimson", line_width=2, annotation_text="This patient", annotation_position="top")
+                        fig.add_vline(x=record["Age"], line_color="#C0473F", line_width=2, annotation_text="This patient", annotation_position="top")
                         fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10), xaxis_title="Age", showlegend=True)
                     else:
-                        fig.add_trace(go.Histogram(x=population[driver["feature"]], name="Population", marker_color="#636EFA"))
-                        fig.add_vline(x=driver["value"], line_color="crimson", line_width=2, annotation_text="This patient", annotation_position="top")
+                        fig.add_trace(go.Histogram(x=population[driver["feature"]], name="Population", marker_color="#0FA3A3"))
+                        fig.add_vline(x=driver["value"], line_color="#C0473F", line_width=2, annotation_text="This patient", annotation_position="top")
                         fig.update_layout(height=220, margin=dict(l=10, r=10, t=30, b=10), xaxis_title=label, showlegend=False)
                     st.plotly_chart(fig, width="stretch")
 
 # ---------------------------------------------------------------------------
-# Tab 3: MRI records
+# Page: MRI records
 # ---------------------------------------------------------------------------
 IMAGESOASIS_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "imagesoasis", "versions", "1", "Data")
 OASIS1_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "OASIS1_raw")
@@ -514,7 +515,7 @@ def _run_mri_2d(image_bytes: bytes, image_name: str):
     probs = result["probs"]
     bar = go.Figure(go.Bar(
         x=list(probs.values()), y=list(probs.keys()), orientation="h",
-        marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
+        marker_color=["#0FA3A3", "#C0473F"][: len(probs)],
         text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
     ))
     bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
@@ -572,7 +573,7 @@ def _run_mri_3d(volume_path: str, volume_name: str):
     probs = result["probs"]
     bar = go.Figure(go.Bar(
         x=list(probs.values()), y=list(probs.keys()), orientation="h",
-        marker_color=["#4CAF3D", "#E12A26"][: len(probs)],
+        marker_color=["#0FA3A3", "#C0473F"][: len(probs)],
         text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
     ))
     bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
@@ -660,7 +661,7 @@ def _run_mri_combined():
     p_combined = combined["probs"]["Demented"]
     bar = go.Figure(go.Bar(
         x=[p2d, p3d, p_combined], y=["2D", "3D", "Combined"], orientation="h",
-        marker_color=["#636EFA", "#636EFA", "#4C8BF5"],
+        marker_color=["#4A6B73", "#4A6B73", "#0FA3A3"],
         text=[f"{v:.0%}" for v in [p2d, p3d, p_combined]], textposition="inside",
     ))
     bar.update_layout(
@@ -684,7 +685,7 @@ def _run_mri_combined():
             st.caption("LLM explanation unavailable (check LLM provider configuration).")
 
 
-with tab_mri:
+def page_mri():
     try:
         from alz import imaging as _imaging_check  # noqa: F401
     except ImportError:
@@ -799,7 +800,7 @@ with tab_mri:
             _run_mri_combined()
 
 # ---------------------------------------------------------------------------
-# Tab 4: EEG records
+# Page: EEG records
 # ---------------------------------------------------------------------------
 EEG_EXAMPLES_DIR = os.path.join(os.path.dirname(__file__), "..", "data", "ds004504", "derivatives")
 EEG_PARTICIPANTS_TSV = os.path.join(os.path.dirname(__file__), "..", "data", "ds004504", "participants.tsv")
@@ -824,7 +825,7 @@ def _eeg_examples() -> list[dict]:
     return examples
 
 
-with tab_eeg:
+def page_eeg():
     with st.container(border=True):
         uploaded_eeg = st.file_uploader("Upload EEG recording", type=["set"])
         examples = _eeg_examples()
@@ -946,9 +947,9 @@ with tab_eeg:
                 fig, (ax, cax) = plt.subplots(1, 2, figsize=(4, 3), gridspec_kw={"width_ratios": [1, 0.06]})
                 im, _ = mne.viz.plot_topomap(slowing, info, axes=ax, show=False, cmap="Reds", contours=4, vlim=vlim)
                 cbar = fig.colorbar(im, cax=cax)
-                cbar.set_label("Slow-wave power (a.u.)", color="white")
-                cbar.ax.yaxis.set_tick_params(color="white")
-                plt.setp(cbar.ax.get_yticklabels(), color="white")
+                cbar.set_label("Slow-wave power (a.u.)", color="#0E2A33")
+                cbar.ax.yaxis.set_tick_params(color="#0E2A33")
+                plt.setp(cbar.ax.get_yticklabels(), color="#0E2A33")
                 fig.patch.set_alpha(0)
                 ax.set_facecolor("none")
                 st.pyplot(fig, width="content")
@@ -959,3 +960,14 @@ with tab_eeg:
                 readout = explain_eeg(eeg, explanation["contributions"])
             if readout:
                 st.info(readout)
+
+
+pg = st.navigation({
+    "Assessments": [
+        st.Page(page_clinical, title="Clinical risk", icon=":material/description:"),
+        st.Page(page_mri, title="MRI records", icon=":material/neurology:"),
+        st.Page(page_eeg, title="EEG records", icon=":material/monitor_heart:"),
+    ],
+    "Summary": [st.Page(page_overview, title="Overview", icon=":material/summarize:")],
+})
+pg.run()
