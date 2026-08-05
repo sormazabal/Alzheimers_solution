@@ -102,6 +102,63 @@ def test_get_result_missing_returns_none_pair():
     assert db.get_result(conn, "nope", "clinical") == (None, None)
 
 
+def _insert_patient_with_ehr(conn, patient_id, group_label, **ehr_overrides):
+    ehr = {"Visit": 1, "MR Delay": 0, "Age": 78, "EDUC": 12, "SES": 2, "MMSE": 27, "nWBV": 0.7, "ASF": 1.1, "M/F": "F"}
+    ehr.update(ehr_overrides)
+    conn.execute(
+        "INSERT INTO patients (patient_id, mri_id, group_label, ehr_json) VALUES (?, ?, ?, ?)",
+        (patient_id, patient_id + "_MR1", group_label, __import__("json").dumps(ehr)),
+    )
+
+
+def test_cohort_features_returns_feature_columns_per_patient():
+    from alz import data
+
+    conn = _fresh_conn()
+    _insert_patient_with_ehr(conn, "p1", "Nondemented", Age=70)
+    _insert_patient_with_ehr(conn, "p2", "Demented", Age=85)
+    conn.commit()
+
+    features = db.cohort_features(conn)
+    assert list(features["patient_id"]) == ["p1", "p2"]
+    assert list(features.columns) == ["patient_id"] + data.FEATURE_COLUMNS
+    assert list(features["Age"]) == [70, 85]
+
+
+def test_cluster_labels_are_stable_across_calls():
+    conn = _fresh_conn()
+    for i, age in enumerate([60, 62, 61, 85, 88, 84]):
+        _insert_patient_with_ehr(conn, f"p{i}", "Nondemented", Age=age)
+    conn.commit()
+
+    features = db.cohort_features(conn)
+    labels = db.cluster_labels(features, k=2)
+    assert len(labels) == len(features)
+    assert labels.nunique() == 2
+    assert list(db.cluster_labels(features, k=2)) == list(labels), "random_state must pin cluster ids across reruns"
+
+
+def test_compare_stats_percentiles_and_counts():
+    df = __import__("pandas").DataFrame({
+        "patient_id": ["a", "b", "c", "d"],
+        "Age": [60, 70, 80, 90],
+        "fusion_score": [0.1, 0.4, 0.6, 0.9],
+    })
+    stats = db.compare_stats(df, cohort_ids=["a", "b", "c", "d"], patient_id="d")
+    row = stats.set_index("metric").loc["fusion_score"]
+    assert row["patient"] == 0.9
+    assert 0 <= row["cohort_pct"] <= 100
+    assert row["cohort_pct"] == 100.0, "max value in the full cohort should sit at the 100th percentile"
+    assert row["population_n"] == 4
+
+    # Same call, narrower cohort_ids: this is how "patient vs similar" and "patient vs
+    # whole population" reuse the identical function.
+    narrow = db.compare_stats(df, cohort_ids=["c", "d"], patient_id="d")
+    narrow_row = narrow.set_index("metric").loc["fusion_score"]
+    assert narrow_row["cohort_n"] == 2
+    assert narrow_row["population_n"] == 4
+
+
 def test_run_patient_caches_and_force_recomputes(monkeypatch):
     conn = _fresh_conn()
     ehr = {"Visit": 1, "MR Delay": 0, "Age": 78, "EDUC": 12, "SES": 2, "MMSE": 27, "nWBV": 0.7, "ASF": 1.1, "M/F": "F"}

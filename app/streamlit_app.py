@@ -1029,18 +1029,43 @@ def page_cohort():
     import plotly.express as px
 
     st.title("Cohort")
-    st.caption("Run all-modality inference across many patients at once; results are cached in data/patients.db.")
+    st.caption("Run all-modality inference across a batch of patients; results are cached in data/patients.db.")
 
     conn = _db_connect()
-    all_ids = [p["patient_id"] for p in db.list_patients(conn)]
+    df = db.cohort_frame(conn)
+    if df.empty:
+        st.info("No patients in the database yet. Use 'Rebuild patient database' below.")
+    else:
+        features = db.cohort_features(conn)
+        k = st.slider("Clusters (k)", 2, 6, 3, help="Phenotype clusters from clinical features (age, MMSE, brain volume, etc.), not from model scores.")
+        df = df.merge(features[["patient_id"]].assign(cluster=db.cluster_labels(features, k=k).values), on="patient_id", how="left")
 
-    c1, c2 = st.columns([3, 1])
-    with c1:
-        select_all = st.checkbox("Select all")
-        chosen = st.multiselect("Patients", all_ids, default=all_ids if select_all else [])
-    with c2:
-        force = st.checkbox("Re-run cached", help="Recompute even patients that already have a cached result.")
+    st.subheader("Define the batch")
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        groups = sorted(df["group_label"].dropna().unique()) if not df.empty else []
+        chosen_groups = st.multiselect("Diagnosis group", groups, default=groups)
+    with f2:
+        clusters = sorted(df["cluster"].dropna().unique()) if not df.empty else []
+        chosen_clusters = st.multiselect("Cluster", clusters, default=clusters, help="Leave all selected to ignore clustering as a filter.")
+    with f3:
+        min_age = int(df["Age"].min()) if not df.empty else 0
+        max_age = int(df["Age"].max()) if not df.empty else 100
+        age_range = st.slider("Age range", min_age, max_age, (min_age, max_age)) if not df.empty else (0, 100)
 
+    filtered = df
+    if not df.empty:
+        filtered = df[
+            df["group_label"].isin(chosen_groups)
+            & df["cluster"].isin(chosen_clusters)
+            & df["Age"].between(*age_range)
+        ]
+    all_ids = list(filtered["patient_id"]) if not filtered.empty else []
+    override = st.multiselect("Or hand-pick patients (overrides the filters above)", list(df["patient_id"]) if not df.empty else [])
+    chosen = override or all_ids
+    st.caption(f"Batch: {len(chosen)} patient(s).")
+
+    force = st.checkbox("Re-run cached", help="Recompute even patients that already have a cached result.")
     if st.button(":material/play_arrow: Run inference", disabled=not chosen):
         progress = st.progress(0.0, text="Starting...")
         for i, pid in enumerate(chosen):
@@ -1048,33 +1073,76 @@ def page_cohort():
             db.run_patient(conn, pid, force=force)
         progress.empty()
         st.success(f"Ran inference for {len(chosen)} patient(s).")
+        st.rerun()
 
-    df = db.cohort_frame(conn)
-    scored = df["fusion_score"].notna().sum()
-    st.caption(f"{scored} of {len(df)} patients have a cached fusion score.")
-
-    st.dataframe(df, width="stretch")
-    st.download_button("Download CSV", df.to_csv(index=False), "cohort_results.csv", "text/csv")
-
-    have_fusion = df.dropna(subset=["fusion_score"])
-    if have_fusion.empty:
-        st.info("Run inference above to populate the charts.")
+    if df.empty:
+        st.divider()
+        if st.button("Rebuild patient database"):
+            with st.spinner("Rebuilding from source datasets..."):
+                n = db.build(conn)
+            st.success(f"Rebuilt: {n} patients.")
+            st.rerun()
         return
 
-    st.subheader("Fusion score distribution by ground-truth group")
-    st.plotly_chart(px.histogram(have_fusion, x="fusion_score", color="group_label", barmode="overlay", nbins=20), width="stretch")
+    scored = filtered["fusion_score"].notna().sum() if not filtered.empty else 0
+    st.caption(f"{scored} of {len(filtered)} patients in this batch have a cached fusion score. Run inference above before comparing.")
 
-    st.subheader("Fusion prediction vs ground-truth group")
-    truth = have_fusion["group_label"].apply(lambda g: "Demented" if g in ("Demented", "Converted") else "Nondemented")
-    predicted = have_fusion["fusion_label"].map({True: "Demented", False: "Nondemented"})
-    confusion = pd.crosstab(truth, predicted).reindex(index=["Nondemented", "Demented"], columns=["Nondemented", "Demented"], fill_value=0)
-    st.plotly_chart(px.imshow(confusion, text_auto=True, labels=dict(x="Predicted", y="Actual", color="Count")), width="stretch")
+    st.dataframe(filtered, width="stretch")
+    st.download_button("Download CSV", filtered.to_csv(index=False), "cohort_results.csv", "text/csv")
 
-    st.subheader("Where does clinical disagree with the fused score?")
-    st.plotly_chart(
-        px.scatter(have_fusion, x="clinical_score", y="fusion_score", color="group_label", hover_data=["patient_id"]),
-        width="stretch",
-    )
+    have_fusion = filtered.dropna(subset=["fusion_score"])
+    if not have_fusion.empty:
+        st.subheader("Fusion score distribution by ground-truth group")
+        st.plotly_chart(px.histogram(have_fusion, x="fusion_score", color="group_label", barmode="overlay", nbins=20), width="stretch")
+
+        st.subheader("Fusion prediction vs ground-truth group")
+        truth = have_fusion["group_label"].apply(lambda g: "Demented" if g in ("Demented", "Converted") else "Nondemented")
+        predicted = have_fusion["fusion_label"].map({True: "Demented", False: "Nondemented"})
+        confusion = pd.crosstab(truth, predicted).reindex(index=["Nondemented", "Demented"], columns=["Nondemented", "Demented"], fill_value=0)
+        st.plotly_chart(px.imshow(confusion, text_auto=True, labels=dict(x="Predicted", y="Actual", color="Count")), width="stretch")
+
+        st.subheader("Where does clinical disagree with the fused score?")
+        st.caption(
+            "Each point is one patient. The dashed line is where clinical and fused scores would agree exactly. "
+            "Points **above** the line: MRI/EEG pushed the risk score higher than clinical alone. "
+            "Points **below**: MRI/EEG pulled it lower. The farther from the line, the bigger the disagreement."
+        )
+        agree_fig = px.scatter(have_fusion, x="clinical_score", y="fusion_score", color="group_label", hover_data=["patient_id"])
+        agree_fig.add_shape(type="line", x0=0, y0=0, x1=1, y1=1, line=dict(color="#4A6B73", dash="dash"))
+        st.plotly_chart(agree_fig, width="stretch")
+
+    st.divider()
+    st.subheader("Compare: patient vs similar, vs population, or cluster vs population")
+
+    profile = df.groupby("cluster")[["Age", "MMSE", "fusion_score"]].agg(["mean", "count"])
+    profile.columns = ["_".join(c) for c in profile.columns]
+    st.caption("Cluster profile (whole database, not just the current batch):")
+    st.dataframe(profile.rename(columns={"Age_count": "n"}).drop(columns=["MMSE_count", "fusion_score_count"]), width="stretch")
+
+    patient_id = st.selectbox("Highlight patient", ["(none)"] + all_ids)
+    patient_id = None if patient_id == "(none)" else patient_id
+    if patient_id:
+        patient_cluster = df.loc[df["patient_id"] == patient_id, "cluster"].iloc[0]
+        st.caption(f"{patient_id} is in cluster {patient_cluster}. The batch filters above define the comparison cohort "
+                   f"(set Cluster to just {patient_cluster} for 'similar patients', or clear all filters for 'whole population').")
+
+    stats = db.compare_stats(df, cohort_ids=all_ids, patient_id=patient_id)
+    if stats.empty:
+        st.info("No scored metrics in this batch yet.")
+        return
+
+    tidy = stats.melt(id_vars=["metric"], value_vars=["cohort_median", "population_median"],
+                       var_name="group", value_name="value")
+    tidy["group"] = tidy["group"].map({"cohort_median": "Batch", "population_median": "Whole population"})
+    fig = px.bar(tidy, x="metric", y="value", color="group", barmode="group")
+    if patient_id:
+        patient_row = stats.dropna(subset=["patient"])
+        fig.add_scatter(x=patient_row["metric"], y=patient_row["patient"], mode="markers",
+                         marker=dict(symbol="diamond", size=14, color="#C0473F"), name=patient_id)
+    st.plotly_chart(fig, width="stretch")
+
+    display_cols = ["metric", "patient", "cohort_n", "cohort_median", "cohort_pct", "population_n", "population_median", "population_pct"]
+    st.dataframe(stats[display_cols], width="stretch")
 
     st.divider()
     if st.button("Rebuild patient database"):

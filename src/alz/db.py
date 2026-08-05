@@ -358,6 +358,84 @@ def cohort_frame(conn: sqlite3.Connection) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
+def cohort_features(conn: sqlite3.Connection) -> pd.DataFrame:
+    """patient_id + the 9 clinical feature columns, one row per patient, for clustering."""
+    from alz import data
+
+    frames = []
+    for row in conn.execute("SELECT patient_id, ehr_json FROM patients ORDER BY patient_id"):
+        frame = data.record_to_frame(json.loads(row["ehr_json"]))
+        frame.insert(0, "patient_id", row["patient_id"])
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame(columns=["patient_id"] + data.FEATURE_COLUMNS)
+    return pd.concat(frames, ignore_index=True)
+
+
+def cluster_labels(features: pd.DataFrame, k: int = 3) -> pd.Series:
+    """KMeans phenotype cluster id per row of cohort_features(). Clusters come from the
+    clinical features rather than the model scores, so "this cluster runs hotter than the
+    population" stays a finding instead of a tautology.
+
+    random_state is fixed because the UI filters on these ids: without it every Streamlit
+    rerun would reshuffle which patients sit in "cluster 2".
+    ponytail: fixed k from the UI, no silhouette search; add tuning if clusters look arbitrary.
+    """
+    from sklearn.cluster import KMeans
+    from sklearn.impute import SimpleImputer
+    from sklearn.pipeline import make_pipeline
+    from sklearn.preprocessing import StandardScaler
+
+    X = features.drop(columns=["patient_id"])
+    k = max(1, min(k, len(X)))
+    pipeline = make_pipeline(
+        SimpleImputer(strategy="mean"),
+        StandardScaler(),
+        KMeans(n_clusters=k, n_init=10, random_state=42),
+    )
+    return pd.Series(pipeline.fit_predict(X), index=features.index, name="cluster")
+
+
+COMPARE_METRICS = ["Age", "MMSE", "clinical_score", "mri_2d_score", "mri_3d_score", "eeg_score", "fusion_score"]
+
+
+def _percentile(others: pd.Series, value) -> float | None:
+    """Midrank percentile of `value` against `others` (the patient's own row already
+    excluded), ties counting half. With self excluded, the top scorer in a cohort of any
+    size lands at exactly the 100th percentile."""
+    others = others.dropna()
+    if others.empty or value is None or pd.isna(value):
+        return None
+    return float(((others < value).sum() + 0.5 * (others == value).sum()) / len(others) * 100)
+
+
+def compare_stats(df: pd.DataFrame, cohort_ids, patient_id: str | None = None) -> pd.DataFrame:
+    """One row per metric: the cohort subset against the whole frame, plus where one patient
+    sits in each. The same call answers all three comparisons the UI offers, by varying the
+    two inputs: patient vs similar (cohort = that patient's cluster), patient vs whole
+    population (cohort = everyone), cluster vs whole population (patient_id=None)."""
+    cohort = df[df["patient_id"].isin(list(cohort_ids))]
+    patient = df[df["patient_id"] == patient_id] if patient_id else df.iloc[:0]
+    cohort_others = cohort[cohort["patient_id"] != patient_id]
+    population_others = df[df["patient_id"] != patient_id]
+    rows = []
+    for metric in COMPARE_METRICS:
+        if metric not in df.columns:
+            continue
+        value = patient[metric].iloc[0] if len(patient) else None
+        rows.append({
+            "metric": metric,
+            "patient": value,
+            "cohort_n": int(cohort[metric].notna().sum()),
+            "cohort_median": cohort[metric].median(),
+            "cohort_pct": _percentile(cohort_others[metric], value),
+            "population_n": int(df[metric].notna().sum()),
+            "population_median": df[metric].median(),
+            "population_pct": _percentile(population_others[metric], value),
+        })
+    return pd.DataFrame(rows)
+
+
 def demo():  # ponytail-required self-check for the matching + cache-hit logic
     patients = [
         {"id": "p1", "class": 1, "age": 80, "sex": "F"},
@@ -387,6 +465,18 @@ def demo():  # ponytail-required self-check for the matching + cache-hit logic
     key, result = get_result(conn, "p1", "eeg")
     assert key == "key-a" and result["score"] == 0.5
     assert get_result(conn, "nope", "eeg") == (None, None)
+
+    stats_df = pd.DataFrame({
+        "patient_id": ["s1", "s2", "s3"],
+        "Age": [60, 70, 80],
+        "fusion_score": [0.1, 0.5, 0.9],
+    })
+    stats = compare_stats(stats_df, cohort_ids=["s2", "s3"], patient_id="s3")
+    fusion_row = stats[stats["metric"] == "fusion_score"].iloc[0]
+    assert fusion_row["patient"] == 0.9
+    assert fusion_row["cohort_pct"] == 100.0, "the max value in its own cohort should rank at 100"
+    assert fusion_row["population_pct"] == 100.0
+    assert fusion_row["cohort_n"] == 2 and fusion_row["population_n"] == 3
 
 
 demo()
