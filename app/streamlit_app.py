@@ -183,10 +183,6 @@ with st.sidebar:
         conn = _db_connect()
         options = [p["patient_id"] for p in db.list_patients(conn)]
         picked = st.selectbox("Patient (linked EHR + MRI + EEG)", options, key="picked_patient_id")
-        st.caption(
-            "MRI/EEG are demographically matched, not this person's real scans -- "
-            "the three source datasets share no real patients (see fusion-methodology.md)."
-        )
         if st.button(":material/play_arrow: Run all modalities", width="stretch"):
             with st.spinner(f"Running clinical + MRI + EEG for {picked}..."):
                 _load_patient_into_session(picked)
