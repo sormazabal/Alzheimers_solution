@@ -14,7 +14,7 @@ class AnthropicClient(LLMClient):
         import anthropic
         try:
             from dotenv import load_dotenv
-            load_dotenv()
+            load_dotenv(override=True)
         except ImportError:
             pass
         self.client = anthropic.Anthropic()
@@ -62,10 +62,10 @@ class GroqClient(LLMClient):
         from groq import Groq
         try:
             from dotenv import load_dotenv
-            load_dotenv()
+            load_dotenv(override=True)
         except ImportError:
             pass
-        self.model = model or os.getenv("GROQ_MODEL", "llama-3.1-8b-instant")
+        self.model = model or os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
         self.client = Groq()
 
     def complete(self, messages: list[dict], system: str = "") -> str:
@@ -96,7 +96,7 @@ class BedrockClient(LLMClient):
         import boto3
         try:
             from dotenv import load_dotenv
-            load_dotenv()
+            load_dotenv(override=True)
         except ImportError:
             pass
         self.model = model or os.getenv("AWS_BEDROCK_MODEL") or os.getenv("BEDROCK_MODEL", "amazon.nova-lite-v1:0")
@@ -128,7 +128,7 @@ class BedrockClient(LLMClient):
 def default_client() -> LLMClient:
     try:
         from dotenv import load_dotenv
-        load_dotenv()
+        load_dotenv(override=True)
     except ImportError:
         pass
     provider = os.getenv("LLM_PROVIDER", "").lower()

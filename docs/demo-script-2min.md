@@ -2,10 +2,13 @@
 
 A TTS-narration source and shot list for a 2-minute screen recording of the app, from the
 perspective of a clinician working through one patient's visit. Audience is a clinician end
-user, so the narration talks the way a physician would chart-side: it names the actual risk
-scores, the MMSE numbers, and the EEG band findings driving each decision. It still leaves out
-validation metrics like AUROC and any mention of model training, that context belongs to the
-app's own documentation, not a bedside narration.
+user, so the narration talks the way a physician would chart-side: it names the exam, the
+imaging finding, and the EEG band pattern driving each decision, without reciting exact score
+percentages or exam values. The screen shows the real numbers as recorded at capture time;
+the voiceover stays qualitative on purpose, so it never has to be re-recorded if the underlying
+patient, cache, or model output changes between takes. It also still leaves out validation
+metrics like AUROC and any mention of model training, that context belongs to the app's own
+documentation, not a bedside narration.
 
 This replaces `docs/demo.md` for recording purposes. That file is a longer prose walkthrough for
 reading, not a timed script, and three of its details no longer match the shipped app (a seeded
@@ -151,7 +154,7 @@ factors`, and open the `Population comparison charts` expander for a beat before
 
 **Narration:**
 
-Her clinical risk score comes back at eighty percent, in the high risk band. The biggest driver is her Mini-Mental State exam score, which dropped from twenty eight to nineteen since her last visit, a decline large enough to warrant a specialist referral rather than routine follow up. The model lists each contributing factor, so the physician can see exactly what pushed that score, not just take the number on faith.
+Her clinical risk score comes back well into the high risk band. The biggest driver is her Mini-Mental State exam score, which has dropped noticeably since her last visit, a decline large enough to warrant a specialist referral rather than routine follow up. The model lists each contributing factor, so the physician can see exactly what pushed that score, not just take the number on faith.
 
 ---
 
@@ -164,7 +167,7 @@ summary` and hold on the `IMPRESSION:` / `FINDINGS:` text.
 
 **Narration:**
 
-Her MRI slice classifies as consistent with dementia, with the model around sixty three percent confident. The heatmap marks the specific regions driving that classification, so a radiologist can check the model's read against the actual anatomy instead of trusting a label blind. Below it, a radiology style summary spells out the structural findings in plain text.
+Her MRI slice classifies as consistent with dementia, with reasonable model confidence. The heatmap marks the specific regions driving that classification, so a radiologist can check the model's read against the actual anatomy instead of trusting a label blind. Below it, a radiology style summary spells out the structural findings in plain text.
 
 ---
 
@@ -180,7 +183,7 @@ is the strongest single visual in the app — give it real screen time, even in 
 
 **Narration:**
 
-One axial slice can only show where atrophy shows up in that single cut. Rotating the full volume lets us see the model's attention across the entire brain, still landing around sixty nine percent confidence on dementia.
+One axial slice can only show where atrophy shows up in that single cut. Rotating the full volume lets us see the model's attention across the entire brain, and the read still lands on dementia.
 
 ---
 
@@ -205,7 +208,7 @@ then hold on the scalp topomap, and finish on the blue LLM readout box underneat
 
 **Narration, part one (gauge):**
 
-Now a third, independent modality, her EEG. The model is scoring for the classic Alzheimer's signature, more slow wave activity relative to alpha, and here it comes back positive, around eighty four percent.
+Now a third, independent modality, her EEG. The model is scoring for the classic Alzheimer's signature, more slow wave activity relative to alpha, and here it comes back clearly positive.
 
 **Narration, part two (why this score, after the pan/hover):**
 
@@ -222,7 +225,48 @@ row, then scroll to the pre-filled `Clinical conclusions` note and the `Guidelin
 
 **Narration:**
 
-Combining all three modalities, clinical, MRI, and EEG, produces one fused risk score around seventy seven percent, pooling each modality's own probability rather than just averaging labels. The system also drafts a clinical note and pulls relevant guideline citations and open trials, so the visit ends with a referral decision backed by evidence, not a single test result.
+Combining all three modalities, clinical, MRI, and EEG, produces one fused risk score, pooling each modality's own probability rather than just averaging labels. The system also drafts a clinical note and pulls relevant guideline citations and open trials, so the visit ends with a referral decision backed by evidence, not a single test result.
+
+---
+
+### Segment 8 — Cohort (optional, extends past the 2:00 cut) · ~0:35
+
+This is a different mode from Segments 1 through 7: not one patient's visit, but a clinic
+reviewing its whole panel. Only add this if you're recording a longer cut, it does not fit
+inside the 2:00 to 2:10 target alongside everything above. It is, however, the one page with
+**no live LLM call at all** (`page_cohort`, `app/streamlit_app.py:1021-1148` has no
+`explain_*` import), so once the batch has been scored it is the single fastest page in the app
+to film, no spinner, no network wait, ever.
+
+**Pre-warm (off camera):** Leave the default filters as-is, all diagnosis groups and clusters
+selected, so the batch is all 40 patients. Leave **`Re-run cached`** unchecked. Click
+**`▶ Run inference`** once, this only computes the patients that aren't already cached, then
+select your Segment-1 patient (`OAS2_0007`, or your chosen ID) in the **`Highlight patient`**
+dropdown near the bottom so its marker appears on the comparison chart. Do not click
+**`Rebuild patient database`** on camera, it globs the full raw imaging tree and can take
+minutes.
+
+**On screen:** Open `Cohort` from the sidebar. Let the results table settle, then scroll past
+`Fusion score distribution by ground-truth group`, hold briefly on
+`Fusion prediction vs ground-truth group`, then `Where does clinical disagree with the fused
+score?`, then scroll to `Compare: patient vs similar, vs population, or cluster vs population`
+and the grouped bar chart, pointing out the highlighted patient's marker against the batch and
+population bars.
+
+**Narration, part one (the batch table and distribution):**
+
+Instead of one patient at a time, this same pipeline can run across an entire panel. Every
+patient's clinical, imaging, and EEG scores land in one table, grouped into phenotype clusters
+from their clinical profile, so a practice can see where its full caseload sits, not just
+today's visit.
+
+**Narration, part two (confusion matrix, scatter, and the highlighted patient):**
+
+This view also shows how well the fused score lines up against each patient's known outcome,
+and flags the cases where the clinical impression and the fused score pull in different
+directions, exactly the patients worth a second look. Highlighting one patient shows exactly
+how they compare against their cluster and against the wider population, not just against
+their own prior visit.
 
 ---
 
@@ -281,18 +325,31 @@ the TTS tool for a single continuous audio file, then split it at the seven para
 during editing to line up with the recorded segments above.
 
 ```text
-Meet a patient coming in with early memory concerns. Her history, a brain scan, and an EEG are already linked to her file. Watch what happens with just one click.
+Here's a patient presenting with early memory concerns, already with a clinical history, an MRI, and an EEG on file. One click runs all three through the model and returns an integrated risk assessment.
 
-Right away, her risk score comes back high, and her memory test score is the biggest reason why. It has dropped sharply since her last visit. Instead of just a number, we get a clear next step, refer her to a specialist, and we can see exactly why.
+Her clinical risk score comes back well into the high risk band. The biggest driver is her Mental State exam score, which has dropped noticeably since her last visit, a decline large enough to warrant a specialist referral rather than routine follow up. The model lists each contributing factor, so the physician can see exactly what pushed that score, not just take the number on faith.
 
-Her brain scan backs that up. This slice reads as consistent with dementia, and it highlights exactly where in the brain that reading comes from. Underneath, a short written summary spells it out in plain language, there to support the read, not to replace it.
+Her MRI slice classifies as consistent with dementia, with reasonable model confidence. The heatmap marks the specific regions driving that classification, so a radiologist can check the model's read against the actual anatomy instead of trusting a label blind. Below it, a radiology style summary spells out the structural findings in plain text.
 
-One slice can only show so much. Let's rotate the full volume and see where the changes really sit, across the whole brain, not just a single cut.
+One axial slice can only show where atrophy shows up in that single cut. Rotating the full volume lets us see the model's attention across the entire brain, and the read still lands on dementia.
 
-The slice and the volume do not have to stand alone. Put them side by side, and here, they agree, giving one combined read instead of two separate opinions.
+The two dimensional and three dimensional reads agree, both landing on dementia, so the combined confirmation carries the same conclusion with less uncertainty than either read alone, one reconciled call instead of two to weigh separately.
 
-Now for a third, independent read, her EEG. We are looking for the slowing pattern often seen in Alzheimer's, and here, it shows up.
+Now a third, independent modality, her EEG. The model is scoring for the classic Alzheimer's signature, more slow wave activity relative to alpha, and here it comes back clearly positive.
 
-A number alone is not enough. Break it down by brain wave band, compare her against a healthy group and an affected group, and map where on her scalp the slowing runs strongest. Now it is something we can actually check, not just trust.
+That score breaks down by frequency band, delta, theta, alpha, beta, and gamma power, each compared against a healthy cohort and an Alzheimer's cohort. The scalp map localizes where that slowing is strongest, so instead of one gauge reading, the physician gets a channel by channel picture to review.
 
-Pull it all together, and her three assessments become one fused risk score. A clinic
+Combining all three modalities, clinical, MRI, and EEG, produces one fused risk score, pooling each modality's own probability rather than just averaging labels. The system also drafts a clinical note and pulls relevant guideline citations and open trials, so the visit ends with a referral decision backed by evidence, not a single test result.
+```
+
+## Full narration, Cohort segment (separate block, optional)
+
+Segment 8 is not part of the 2:00 to 2:10 cut above, it is a separate optional clip. Paste this
+block into the TTS tool on its own, then split at the one paragraph break to line up with the
+two halves of the Cohort shot list.
+
+```text
+Instead of one patient at a time, this same pipeline can run across an entire panel. Every patient's clinical, imaging, and EEG scores land in one table, grouped into phenotype clusters from their clinical profile, so a practice can see where its full caseload sits, not just today's visit.
+
+This view also shows how well the fused score lines up against each patient's known outcome, and flags the cases where the clinical impression and the fused score pull in different directions, exactly the patients worth a second look. Highlighting one patient shows exactly how they compare against their cluster and against the wider population, not just against their own prior visit.
+```
