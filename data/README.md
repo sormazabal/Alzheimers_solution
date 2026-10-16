@@ -1,12 +1,17 @@
 # Data
 
-`oasis_longitudinal.csv` here is a **synthetic** sample (40 fake subjects, 82 visits) that mimics
-the schema of the OASIS-2 longitudinal dataset, so the demo runs out of the box without any data
-agreement.
+The clinical model trains on real OASIS data in `OASIS1_raw/`:
 
-To use real data, download the OASIS-2 longitudinal CSV from
-[oasis-brains.org](https://www.oasis-brains.org/) and replace this file — same column names, no
-code changes needed.
+- `oasis_cross-sectional-*.xlsx` (OASIS-1): one visit per subject. No `Group` column, so it is
+  derived from CDR (0 = Nondemented, above 0 = Demented). `Educ` is a 1-5 category, mapped to
+  approximate years. Rows without CDR/MMSE (young controls) are dropped.
+- `oasis_longitudinal_demographics-*.xlsx` (OASIS-2): repeat visits, `Group` is the target.
+
+`alz.data.load_combined()` stacks both (608 rows). `train.py` uses them by default and splits
+cross-validation by `Subject ID`. These files have their own data-use terms, so do not commit them.
+
+`oasis_longitudinal.csv` is a **synthetic** sample (40 fake subjects, 82 visits) kept only for the
+demo patient list in `src/alz/db.py`. Pass it with `train.py --data` for a quick test.
 
 ## Phase-2 imaging data
 

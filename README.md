@@ -55,7 +55,7 @@ gitignored).
 uv venv
 .venv\Scripts\activate       # Windows; use `source .venv/bin/activate` on macOS/Linux
 uv pip install -r requirements.txt
-uv run python train.py                          # trains models/model.joblib on data/oasis_longitudinal.csv
+uv run python train.py                          # trains models/model.joblib on real OASIS-1 + OASIS-2 (data/OASIS1_raw/*.xlsx)
 uv run pytest tests/test_smoke.py               # train -> predict roundtrip check
 uv run streamlit run app/streamlit_app.py       # interactive demo
 ```
@@ -149,8 +149,9 @@ requirements.txt, requirements-imaging.txt, requirements-eeg.txt  # base / MRI /
   models for the narrative explainability layer (`src/alz/explain.py`), not vendored code.
 
 These reference repos ship no license, so we adapt their approach in our own code rather than
-copying files verbatim, and credit them here. Only a synthetic OASIS-shaped sample is committed;
-real OASIS/ds004504 data has its own data-use terms (see [data/README.md](data/README.md)).
+copying files verbatim, and credit them here. The clinical model trains on real OASIS-1 and OASIS-2 demographics (608 rows) placed in
+`data/OASIS1_raw/`; a synthetic OASIS-shaped sample is still bundled for the demo patient list.
+Real OASIS/ds004504 data has its own data-use terms and should not be redistributed (see [data/README.md](data/README.md)).
 
 You can download the data from https://doi.org/10.5281/zenodo.21330855. 
 

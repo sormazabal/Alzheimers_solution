@@ -67,7 +67,7 @@ I want to be precise about where we are: this is MVP-plus, working end to end. C
 
 - **Target leakage:** the clinical dementia rating (CDR) is not a predictor of diagnosis, it *is* the diagnosis. The reference approach trained on it anyway, which inflates accuracy on paper while producing a tool that cannot run before a diagnosis exists. Removing it is correct, but it also removes the single strongest feature, so the honest model has to work harder for a lower, more defensible number.
 - **Near-ceiling accuracy is a warning sign, not a win:** the current MRI classifier reports 1.00 accuracy on held-out data. For a frozen-backbone, head-only model on an imbalanced dataset, that is far more likely to reflect subject-level leakage across the train/val/test split (the same patient's slices appearing in more than one split) or a distribution too easy to be representative, than genuine clinical-grade generalization. This has to be treated as unproven until verified on a subject-disjoint, external cohort.
-- **Small, synthetic, or narrow samples:** the tabular model is validated on 82 synthetic visits and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim; both are consistent with a wide range of true performance, including much worse than the point estimate shown.
+- **Small or narrow samples:** the tabular model is validated on 608 real OASIS-1 and OASIS-2 visits and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim; both are consistent with a wide range of true performance, including much worse than the point estimate shown.
 - **No paired ground truth for fusion:** the log-opinion-pool fusion combines clinical, MRI, and EEG scores mathematically, but no dataset in hand has all three modalities on the same patients. The fusion logic is sound, but its output has never been checked against a real, jointly-labeled case — it is unvalidated as a combined predictor, independent of how well each modality performs alone.
 - **Explanation is not causation:** `top_drivers()` reports which features moved *this model's* score, not which factors cause Alzheimer's risk in the patient. Presenting coefficient weight as a clinical "reason" without that caveat risks overstating what the tool actually knows.
 - **Population mismatch:** OASIS (tabular and imaging) and the AHEPA EEG cohort are specific, public research populations, not necessarily representative of the client's own patient demographics. A model earns its numbers on one distribution and has not yet been asked to generalize to another.
@@ -84,7 +84,7 @@ The first is target leakage. The clinical dementia rating, CDR, is not a predict
 
 Second, near-ceiling accuracy is a warning sign, not a win. Our original MRI classifier reported 1.00 accuracy on held-out data, and it turned out to be exactly what it looked like: subject-level leakage, the same patient's slices showing up in more than one split. We fixed it by grouping the split by patient instead of by image, and collapsed the target to binary Non Demented vs Demented, since the Moderate Dementia class only has two subjects. The corrected model reports well below 1.00 now, which is the honest number.
 
-Third, our samples are small. The tabular model is validated on 82 synthetic visits, and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim. Both are consistent with a wide range of true performance, including meaningfully worse than the point estimate I'm showing you.
+Third, our samples are small. The tabular model is validated on 608 real OASIS-1 and OASIS-2 visits, and the EEG model on 65 real recordings. Neither sample size supports a confidence interval tight enough for a clinical claim. Both are consistent with a wide range of true performance, including meaningfully worse than the point estimate I'm showing you.
 
 Fourth, we don't have paired ground truth for fusion. The fusion logic combines clinical, MRI, and EEG scores mathematically, but no dataset we have contains all three modalities on the same patients. The math is sound, but its output has never been checked against a real, jointly-labeled case.
 
@@ -137,7 +137,7 @@ Finally, there's an AI layer that does the busywork a clinician shouldn't have t
 - `__init__.py` — public `predict()` seam composing the above.
 
 **Layer 3 — Data sources:**
-- Local tabular CSV `data/oasis_longitudinal.csv` (synthetic sample).
+- Local tabular data: real OASIS-1 and OASIS-2 xlsx in `data/OASIS1_raw/` (608 rows combined).
 - Kaggle imaging dataset `ninadaithal/imagesoasis` via `download_oasis.py` (kagglehub cache).
 - EEG dataset `ds004504` (real, publicly available OpenNeuro AHEPA resting-state recordings).
 - Saved model artifacts: `models/model.joblib`, `models/mri_model.pt`, `models/eeg_model.joblib`.
@@ -200,12 +200,12 @@ justification and limitations: [docs/fusion-methodology.md](docs/fusion-methodol
 
 All three models are binary classifiers now, scored on the same metric set. Clinical and
 EEG metrics are pooled out-of-fold predictions from stratified 5-fold CV (a single
-held-out split is too noisy at n=82 / n=65). The MRI split is grouped by patient, not by
+held-out split is too noisy at n=608 / n=65). The clinical folds are grouped by subject. The MRI split is grouped by patient, not by
 image slice — see the note below on why that mattered.
 
 | Model | Algorithm | Accuracy | Balanced acc. | AUROC | AUPRC | F1 | Sensitivity | Specificity | Eval | Data used |
 |---|---|---|---|---|---|---|---|---|---|---|
-| Clinical | Logistic regression (9 features) | 0.70 | 0.65 | 0.73 | 0.64 | 0.55 | 0.47 | 0.84 | 5-fold CV, out-of-fold | Synthetic `oasis_longitudinal.csv` (82 rows) — indicative only, not a real-world benchmark |
+| Clinical | Logistic regression (9 features) | 0.80 | 0.80 | 0.88 | 0.88 | 0.77 | 0.72 | 0.88 | 5-fold CV grouped by subject, out-of-fold | Real OASIS-1 (235 subjects) + OASIS-2 (373 visits), 608 rows; CDR-derived labels for OASIS-1 |
 | MRI (Non Demented vs Demented) — *preliminary* | ResNet18 (frozen backbone, retrained head) | 0.81 | 0.81 | 0.91 | 0.89 | 0.78 | 0.70 | 0.91 | Held-out **patients**, 70/15/15 (small balanced subsample) | Real Kaggle `imagesoasis` mirror (~23k slices, ~94 subjects) |
 | EEG | Logistic regression on band-power features | 0.75 | 0.75 | 0.82 | 0.83 | 0.77 | 0.75 | 0.76 | 5-fold CV, out-of-fold | Real ds004504 (AHEPA resting-state EEG, n=65) |
 | Integrated prognosis | Logarithmic opinion pool (no trained parameters) | — | — | — | — | — | — | — | Not separately benchmarked | No paired multi-modal ground truth exists to validate against (see methodology doc) |
@@ -238,28 +238,27 @@ For EEG, a resting-state recording gets turned into relative band power, delta, 
 
 Now, the part I want to spend the most time on: how we fuse these into one prognosis. Each modality's probability gets converted to log-odds, averaged with equal weight by default, and converted back with a sigmoid. The intuition is this: a modality sitting near 0.5, meaning it's uncertain, has a log-odds near zero, so it barely moves the fused result. A confident modality, with a probability near 0 or near 1, pulls the fused score strongly toward it. So a stronger signal dominates a weaker one automatically, without any hand-picked weighting.
 
-Now the metrics table. Clinical logistic regression gets 0.76 held-out accuracy on a stratified 75-25 split, but that's on 82 rows of synthetic data, so treat it as indicative, not a real-world benchmark. The MRI model reports 1.00 accuracy across train, validation, and test. I want to say this as clearly as I can: that number is an existence proof that the pipeline trains and evaluates correctly. For this class-imbalanced dataset with a frozen-backbone, head-only model, that number is more likely explained by subject-level leakage than genuine generalization, and AUROC and AUPRC report not-applicable because sklearn can't compute those curves for a class with no predicted negatives. The EEG model gets 0.75 mean accuracy across five-fold cross-validation on 65 real recordings. And the integrated prognosis has not been separately benchmarked, because we don't have a dataset with all three modalities on the same patients yet."
+Now the metrics table. Clinical logistic regression gets 0.80 out-of-fold accuracy and 0.88 AUROC in five-fold cross-validation grouped by subject, on 608 real OASIS-1 and OASIS-2 rows. That is a single-cohort result without external validation, so treat it as indicative. The MRI model reports 1.00 accuracy across train, validation, and test. I want to say this as clearly as I can: that number is an existence proof that the pipeline trains and evaluates correctly. For this class-imbalanced dataset with a frozen-backbone, head-only model, that number is more likely explained by subject-level leakage than genuine generalization, and AUROC and AUPRC report not-applicable because sklearn can't compute those curves for a class with no predicted negatives. The EEG model gets 0.75 mean accuracy across five-fold cross-validation on 65 real recordings. And the integrated prognosis has not been separately benchmarked, because we don't have a dataset with all three modalities on the same patients yet."
 
 ## Slide 7: Dataset overview
 
 | Data source | What it contains | How it is acquired |
 |---|---|---|
-| `data/oasis_longitudinal.csv` (bundled) | **Synthetic** OASIS-2-shaped sample: 40 fake subjects, 82 visits; columns `Subject ID, MRI ID, Group, Visit, MR Delay, M/F, Hand, Age, EDUC, SES, MMSE, CDR, eTIV, nWBV, ASF` | Committed to repo; runs out of the box |
-| OASIS-2 longitudinal (real) | Same schema; `Group` (Nondemented/Demented/Converted) is the target | Download from oasis-brains.org, drop-in replace — no code change |
+| OASIS-1 cross-sectional (real) | 235 usable subjects, one visit each; no Group label, so it is derived from CDR (0 = Nondemented, above 0 = Demented). Education is a 1-5 category, mapped to approximate years | Download from oasis-brains.org into `data/OASIS1_raw/` |
+| OASIS-2 longitudinal (real) | 373 visits; `Group` (Nondemented/Demented/Converted) is the target | Download from oasis-brains.org into `data/OASIS1_raw/` |
+| `data/oasis_longitudinal.csv` (bundled) | Synthetic OASIS-2-shaped sample (40 subjects, 82 visits), kept only for the demo patient list | Committed to repo |
 | OASIS imaging (`ninadaithal/imagesoasis`) | 2D JPEG brain slices in per-class severity folders | `python data/download_oasis.py` (kagglehub) |
 
 **Key characteristics / privacy:**
-- Only synthetic data is committed — the demo needs no data agreement.
+- The clinical model trains on real OASIS-1 and OASIS-2 files that are not redistributed. Only a synthetic sample is committed for the demo.
 - Real OASIS data has its own data-use terms; imaging mirror is publicly downloadable (no DUA).
 - `CDR` excluded as predictor (diagnosis leakage); `SES`/`MMSE` missing values mean-imputed; `Subject ID`, `MRI ID`, `Hand`, `eTIV` dropped/unused.
 
 **Speaker notes:**
 
-"A word on the data behind all of this. The bundled CSV that ships in the repo is synthetic, forty fake subjects, eighty-two visits, shaped exactly like OASIS-2. It's committed to the repo and runs out of the box, on purpose, so that anyone can try this without signing a data-use agreement.
+"A word on the data behind all of this. The clinical model trains on real data: OASIS-1, 235 usable subjects with one visit each, and OASIS-2, 373 longitudinal visits, 608 rows in total. OASIS-1 has no diagnosis label, so we derive it from CDR. OASIS-2 uses its own Group column, with converted subjects counted as at-risk. A small synthetic sample is still bundled so the demo runs without a data-use agreement. The OASIS imaging dataset is a real, publicly downloadable Kaggle mirror of brain slices organized by severity class, and there's a script that pulls it down for you.
 
-Real OASIS-2 longitudinal data has the same schema, with Group, nondemented, demented, or converted, as the target. You download it from oasis-brains.org and drop it in, no code change required. The OASIS imaging dataset is a real, publicly downloadable Kaggle mirror of brain slices organized by severity class, and there's a script that pulls it down for you.
-
-On privacy: only synthetic data is committed to the repo. Real OASIS data has its own data-use terms, but the imaging mirror is public with no data-use agreement needed. And as I mentioned earlier, CDR is excluded as a predictor because it's diagnosis leakage, that's the same point from a few slides ago. SES and MMSE missing values are mean-imputed, and identifiers like Subject ID, MRI ID, hand, and eTIV are dropped or unused."
+On privacy: the real OASIS files are not committed to the repo, and only a synthetic sample ships. Real OASIS data has its own data-use terms, but the imaging mirror is public with no data-use agreement needed. And as I mentioned earlier, CDR is excluded as a predictor because it's diagnosis leakage, that's the same point from a few slides ago. SES and MMSE missing values are mean-imputed, and identifiers like Subject ID, MRI ID, hand, and eTIV are dropped or unused."
 
 ## Slide 8: Technical implementation and demo
 **Environment:** Python (uses `str | None` / `tuple[...]` syntax → **3.10+**; no explicit pin in repo). Package manager: **uv**. Core deps: scikit-learn, pandas, joblib, streamlit, fastapi, uvicorn, httpx, pytest. Phase-2 deps (`requirements-imaging.txt`): torch, torchvision, pillow, kagglehub, scikit-learn, matplotlib.
@@ -287,9 +286,9 @@ On integration: we pull imaging data from Kaggle through kagglehub, and we use a
 If I'm demoing this live, here's what I'd run: create the virtual environment, install requirements, run train.py to produce the tabular model, run the smoke test to confirm the train-then-predict roundtrip works, and then launch the Streamlit app for the interactive demo, or the FastAPI server if I want to hit the REST endpoint directly. If time allows, I'd also show the phase-two imaging commands, training the MRI model and running the evaluation script that produces the ROC and PR plots."
 
 ## Slide 9: Results and evaluation
-No numeric benchmark results are committed to the repo (models train from data at runtime; only synthetic data ships). The evaluation *machinery* is in place:
+Clinical metrics are saved to `results/clinical_metrics.json` when you run `train.py`; the real OASIS files themselves are not committed. The evaluation *machinery* is in place:
 
-**Tabular track:** `train.py` reports held-out accuracy on a stratified 75/25 split (printed at train time).
+**Tabular track:** `train.py` reports pooled out-of-fold metrics from 5-fold CV grouped by subject (printed at train time).
 
 **Imaging track:** per-epoch train/val and final test **accuracy, AUROC, AUPRC** (`imaging._metrics`); `evaluate_mri.py` reports all three splits and saves ROC + PR curves to `eval_plots/`. AUROC/AUPRC gracefully report `n/a` when a split has a single class (tiny/synthetic data).
 
@@ -297,9 +296,9 @@ No numeric benchmark results are committed to the repo (models train from data a
 
 **Speaker notes:**
 
-"I want to be precise about what's committed to the repository versus what you'd generate by running it. No numeric benchmark results ship in the repo, because the models train from data at runtime and only synthetic data is bundled. What is in place is the evaluation machinery itself.
+"I want to be precise about what's committed to the repository versus what you'd generate by running it. The real OASIS files are not shipped in the repo, so you generate the clinical metrics by running the training script. What is in place is the evaluation machinery itself.
 
-On the tabular track, train.py reports held-out accuracy on a stratified 75-25 split, printed at train time. On the imaging track, we get per-epoch train and validation metrics plus a final test accuracy, AUROC, and AUPRC, and evaluate_mri.py reports all three splits and saves ROC and precision-recall curves to disk. Those AUROC and AUPRC numbers gracefully report not-applicable when a split only has one class, which can happen with tiny or synthetic data.
+On the tabular track, train.py reports out-of-fold metrics from five-fold cross-validation grouped by subject, printed at train time. On the imaging track, we get per-epoch train and validation metrics plus a final test accuracy, AUROC, and AUPRC, and evaluate_mri.py reports all three splits and saves ROC and precision-recall curves to disk. Those AUROC and AUPRC numbers gracefully report not-applicable when a split only has one class, which can happen with tiny or synthetic data.
 
 And on test coverage, there's a smoke test for the tabular roundtrip, an API test for the predict and health endpoints, and an imaging test that runs a full train, predict, evaluate roundtrip on a synthetic dataset, and skips itself gracefully if the imaging dependencies aren't installed.
 
@@ -342,7 +341,7 @@ So the real cost lever isn't the AI layer at all, at this price point, explainab
 **Future / planned:**
 - **Multi-modal fusion** (tabular + imaging) — the stated SHS differentiator, not built.
 - Deliberately deferred: auth, Docker, model registry, CI.
-- Swap synthetic CSV for real OASIS-2 data; train imaging model on real OASIS slices for real metrics.
+- Add external validation (ADNI or OASIS-3) for the clinical model; train imaging model on real OASIS slices for real metrics.
 
 **Speaker notes:**
 
@@ -352,7 +351,7 @@ What's done: the tabular risk model, its explainability, and the predict seam ar
 
 What's ahead: multi-modal fusion of tabular and imaging is the differentiator the client specifically asked for, and while the fusion logic itself is built, validating it against real paired data is the honest next milestone, not a nice-to-have I'm glossing over.
 
-I also want to be clear that some things are deliberately deferred, not overlooked: authentication, Docker packaging, a model registry, and continuous integration. Those are scoped-out choices for this stage of the project, and I'm happy to talk through the sequencing if that's useful. And longer term, we'd swap the synthetic CSV for real OASIS-2 data and train the imaging model on real OASIS slices to get real, defensible metrics instead of the indicative ones I showed you earlier."
+I also want to be clear that some things are deliberately deferred, not overlooked: authentication, Docker packaging, a model registry, and continuous integration. Those are scoped-out choices for this stage of the project, and I'm happy to talk through the sequencing if that's useful. And longer term, we'd add an external cohort such as ADNI or OASIS-3 to validate the clinical model, and train the imaging model on real OASIS slices to get real, defensible metrics instead of the indicative ones I showed you earlier."
 
 ## Slide 12: Conclusion and key takeaways
 - For patients: risk surfaces from data already in their chart, days before anyone books a scan, so the patients who need imaging get it sooner and the ones who don't are spared the cost, wait, and anxiety of an unnecessary MRI.
