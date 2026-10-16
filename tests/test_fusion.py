@@ -45,3 +45,13 @@ def test_reliability_weight_shifts_toward_upweighted_modality():
         reliability={"MRI": 5.0},
     )
     assert mri_upweighted["score"] > equal["score"]
+
+
+def test_spread_flags_disagreement_and_is_zero_for_one_modality():
+    result = integrated_score(
+        clinical={"score": 0.35},
+        mri={"probs": {"Non Demented": 0.32}},
+        eeg={"score": 0.16},
+    )
+    assert abs(result["spread"] - 0.52) < 1e-9
+    assert integrated_score(clinical={"score": 0.7})["spread"] == 0.0

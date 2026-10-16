@@ -47,7 +47,8 @@ def integrated_score(
     not tuned here (no paired multi-modal validation data exists yet).
 
     Returns None if no modality is supplied, else
-    {"score": float, "components": [{"modality", "p", "weight"}, ...], "note": str}.
+    {"score": float, "spread": float (max p - min p, 0 with one modality),
+     "components": [{"modality", "p", "weight"}, ...], "note": str}.
     """
     components = _p_dementia(clinical, mri, eeg)
     if not components:
@@ -62,8 +63,10 @@ def integrated_score(
     names = [name for name, _ in components]
     note = f"Fused: {' + '.join(names)}" if len(names) > 1 else f"Only {names[0]} assessed"
 
+    ps = [p for _, p in components]
     return {
         "score": score,
+        "spread": max(ps) - min(ps),
         "components": [
             {"modality": name, "p": p, "weight": w}
             for (name, p), w in zip(components, weights)

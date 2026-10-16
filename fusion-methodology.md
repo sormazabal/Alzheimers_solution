@@ -81,6 +81,14 @@ default.
   Overview tile still means something when a patient has only been through
   one assessment.
 
+## Display
+
+The fused value is a probability of dementia, so the UI shows it as a risk tier
+(Low / Intermediate / High risk, cutoffs 0.33 and 0.66), not a severity stage.
+Because averaging in logit space hides conflict, the Overview card also warns
+when the spread between modalities (max p minus min p) exceeds 0.4. Both the
+cutoffs and the 0.4 threshold are UI heuristics, not tuned on data.
+
 ## Upgrade path
 
 Once a dataset with paired tabular + imaging (+ EEG) labels exists:

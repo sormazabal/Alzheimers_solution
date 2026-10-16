@@ -75,6 +75,13 @@ def band_for_score(score: float) -> tuple[str, str]:
     return "Moderate Dementia", "high"
 
 
+def risk_tier_for_score(score: float) -> tuple[str, str]:
+    """(risk label, level) for the fused P(dementia). Same cutoffs as band_for_score, but
+    named as risk tiers because the fused value is a probability, not a severity stage."""
+    label, level = band_for_score(score)
+    return {"normal": "Low risk", "mild": "Intermediate risk", "high": "High risk"}[level], level
+
+
 MRI_LEVELS = {"Non Demented": "normal", "Demented": "high"}
 
 def next_steps(level: str, pending: list[str]) -> str:
@@ -97,6 +104,7 @@ def demo():  # ponytail-required self-check for the only nontrivial pure logic h
     assert band_for_score(0.1)[1] == "normal"
     assert band_for_score(0.5)[1] == "mild"
     assert band_for_score(0.9)[1] == "high"
+    assert risk_tier_for_score(0.37) == ("Intermediate risk", "mild")
     assert "MRI" in next_steps("mild", ["MRI", "EEG"])
     assert "remaining" not in next_steps("high", [])
 
@@ -205,7 +213,7 @@ with st.sidebar:
         eeg=st.session_state.eeg_result,
     )
     if fused_sidebar:
-        label, level = band_for_score(fused_sidebar["score"])
+        label, level = risk_tier_for_score(fused_sidebar["score"])
         st.markdown(f"Integrated prognosis: {chip(label, level)} ({fused_sidebar['score']:.0%})", unsafe_allow_html=True)
     else:
         st.caption("Integrated prognosis: not yet assessed")
@@ -241,13 +249,19 @@ def page_overview():
     with st.container(border=True):
         st.caption("Integrated prognosis")
         if fused:
-            label, level = band_for_score(fused["score"])
+            label, level = risk_tier_for_score(fused["score"])
             st.markdown(
                 f'{chip(label, level)} &nbsp; <span style="font-size:1.4em; font-weight:600;">'
                 f'{fused["score"]:.0%}</span> <span style="opacity:0.7;">posterior probability of dementia</span>',
                 unsafe_allow_html=True,
             )
             st.caption(fused["note"])
+            if fused["spread"] > 0.4:
+                ps = [c["p"] for c in fused["components"]]
+                st.warning(
+                    f"Modalities disagree: individual estimates range from {min(ps):.0%} to {max(ps):.0%}. "
+                    "Review each result before relying on the combined value."
+                )
             with st.expander("How this was combined"):
                 st.caption("Each modality's own dementia-risk estimate (not shares of a total):")
                 for c in fused["components"]:
@@ -364,36 +378,37 @@ def page_overview():
 # Page: Clinical risk
 # ---------------------------------------------------------------------------
 def page_clinical():
+    rec = st.session_state.clinical_record or {}
     with st.form("patient_form"):
         col1, col2, col3 = st.columns(3)
         with col1:
             with st.container(border=True):
                 st.markdown("**Demographics**")
-                age = st.number_input("Age", min_value=18, max_value=110, value=75, help=FEATURE_META["Age"]["definition"])
-                sex = st.selectbox("Sex", ["F", "M"], help=FEATURE_META["Sex_M"]["definition"])
-                ses = st.number_input("Socioeconomic status (1=highest, 5=lowest)", min_value=1, max_value=5, value=3, help=FEATURE_META["SES"]["definition"])
-                educ = st.number_input("Years of education", min_value=0, max_value=30, value=12, help=FEATURE_META["EDUC"]["definition"])
+                age = st.number_input("Age", min_value=18, max_value=110, value=int(rec.get("Age", 75)), help=FEATURE_META["Age"]["definition"])
+                sex = st.selectbox("Sex", ["F", "M"], index=["F", "M"].index(rec.get("M/F", "F")), help=FEATURE_META["Sex_M"]["definition"])
+                ses = st.number_input("Socioeconomic status (1=highest, 5=lowest)", min_value=1, max_value=5, value=int(rec.get("SES", 3)), help=FEATURE_META["SES"]["definition"])
+                educ = st.number_input("Years of education", min_value=0, max_value=30, value=int(rec.get("EDUC", 12)), help=FEATURE_META["EDUC"]["definition"])
         with col2:
             with st.container(border=True):
                 st.markdown("**Cognitive scores**")
                 mmse = st.number_input(
-                    "MMSE score (0-30)", min_value=0, max_value=30, value=27,
+                    "MMSE score (0-30)", min_value=0, max_value=30, value=int(rec.get("MMSE", 27)),
                     help="Mini-Mental State Exam: a bedside 30-point cognitive screening test "
                          "(memory, attention, language, orientation). Lower scores mean more impairment; "
                          "27-30 is normal, <24 typically flags concern.",
                 )
-                visit = st.number_input("Visit number", min_value=1, max_value=10, value=1, help=FEATURE_META["Visit"]["definition"])
+                visit = st.number_input("Visit number", min_value=1, max_value=10, value=int(rec.get("Visit", 1)), help=FEATURE_META["Visit"]["definition"])
         with col3:
             with st.container(border=True):
                 st.markdown("**Brain volumetrics**")
-                nwbv = st.number_input("Normalized whole-brain volume", min_value=0.5, max_value=0.95, value=0.75, format="%.3f", help=FEATURE_META["nWBV"]["definition"])
+                nwbv = st.number_input("Normalized whole-brain volume", min_value=0.5, max_value=0.95, value=float(rec.get("nWBV", 0.75)), format="%.3f", help=FEATURE_META["nWBV"]["definition"])
                 asf = st.number_input(
-                    "Atlas scaling factor", min_value=0.7, max_value=1.7, value=1.2, format="%.3f",
+                    "Atlas scaling factor", min_value=0.7, max_value=1.7, value=float(rec.get("ASF", 1.2)), format="%.3f",
                     help="A head-size correction factor used to normalize MRI volume measurements "
                          "(like nWBV) so brains of different physical sizes can be compared fairly. "
                          "It reflects skull/head size, not disease severity.",
                 )
-                mr_delay = st.number_input("MRI delay (days)", min_value=0, max_value=2000, value=0, help=FEATURE_META["MR Delay"]["definition"])
+                mr_delay = st.number_input("MRI delay (days)", min_value=0, max_value=2000, value=int(rec.get("MR Delay", 0)), help=FEATURE_META["MR Delay"]["definition"])
 
         submitted = st.form_submit_button("Assess risk")
 
@@ -681,6 +696,20 @@ def _run_mri_3d(volume_path: str, volume_name: str):
             st.caption("LLM explanation unavailable (check LLM provider configuration).")
 
 
+def _show_mri_cached(result: dict):
+    """Renders a result loaded by 'Run all modalities' (no image/heatmap on hand)."""
+    st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
+    probs = result["probs"]
+    bar = go.Figure(go.Bar(
+        x=list(probs.values()), y=list(probs.keys()), orientation="h",
+        marker_color=["#0FA3A3", "#C0473F"][: len(probs)],
+        text=[f"{v:.0%}" for v in probs.values()], textposition="inside",
+    ))
+    bar.update_layout(height=140, margin=dict(l=10, r=10, t=10, b=10), xaxis=dict(range=[0, 1], tickformat=".0%"))
+    st.plotly_chart(bar, width="stretch")
+    st.caption("Loaded from Run all modalities. Click Run evaluation for the heatmap and report.")
+
+
 def _run_mri_combined():
     """Fuses the last 2D and 3D results (each stashed by _run_mri_2d/_run_mri_3d)
     into one combined score, classification, and radiology report."""
@@ -765,7 +794,7 @@ def page_mri():
             else:
                 current_id_2d = None
 
-            if current_id_2d != st.session_state.get("mri_2d_input_id"):
+            if st.session_state.get("mri_2d_input_id") not in (None, current_id_2d):
                 st.session_state.mri_2d_confirmed = None
                 st.session_state.mri_2d_result = None
 
@@ -784,6 +813,8 @@ def page_mri():
             if st.session_state.get("mri_2d_confirmed"):
                 image_bytes, image_name = st.session_state.mri_2d_confirmed
                 _run_mri_2d(image_bytes, image_name)
+            elif st.session_state.mri_2d_result:
+                _show_mri_cached(st.session_state.mri_2d_result["result"])
             else:
                 st.caption("Upload a slice or select an example, then click Run evaluation.")
 
@@ -809,7 +840,7 @@ def page_mri():
             else:
                 current_id_3d = None
 
-            if current_id_3d != st.session_state.get("mri_3d_input_id"):
+            if st.session_state.get("mri_3d_input_id") not in (None, current_id_3d):
                 st.session_state.mri_3d_confirmed = None
                 st.session_state.mri_3d_result = None
 
@@ -848,6 +879,8 @@ def page_mri():
             if st.session_state.get("mri_3d_confirmed"):
                 volume_path, volume_name = st.session_state.mri_3d_confirmed
                 _run_mri_3d(volume_path, volume_name)
+            elif st.session_state.mri_3d_result:
+                _show_mri_cached(st.session_state.mri_3d_result["result"])
             else:
                 st.caption("Upload a volume or select a subject, then click Run evaluation.")
 
