@@ -9,7 +9,7 @@ import joblib
 import pandas as pd
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import StratifiedKFold, cross_val_predict
+from sklearn.model_selection import StratifiedGroupKFold, cross_val_predict
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
@@ -27,11 +27,12 @@ def build_pipeline() -> Pipeline:
     ])
 
 
-def train_model(X: pd.DataFrame, y: pd.Series, random_state: int = 42) -> tuple[Pipeline, dict]:
-    """Metrics come from pooled 5-fold out-of-fold predictions (n=82 is too small for a
-    single honest held-out split); the returned pipeline is then refit on all the data."""
-    cv = StratifiedKFold(n_splits=5, shuffle=True, random_state=random_state)
-    oof_proba = cross_val_predict(build_pipeline(), X, y, cv=cv, method="predict_proba")
+def train_model(X: pd.DataFrame, y: pd.Series, groups=None, random_state: int = 42) -> tuple[Pipeline, dict]:
+    """Metrics come from pooled 5-fold out-of-fold predictions; the returned pipeline is then
+    refit on all the data. Pass `groups` (subject IDs) so repeat visits of one subject never
+    straddle train and test."""
+    cv = StratifiedGroupKFold(n_splits=5, shuffle=True, random_state=random_state)
+    oof_proba = cross_val_predict(build_pipeline(), X, y, cv=cv, groups=groups, method="predict_proba")
     metrics = binary_metrics(y, oof_proba[:, 1])
 
     pipeline = build_pipeline()

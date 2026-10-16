@@ -4,17 +4,16 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 
-from alz.data import clean, load_raw
+from alz.data import clean, load_combined
 from alz.explain import top_drivers
 from alz.model import predict, train_model
 
-DATA_PATH = os.path.join(os.path.dirname(__file__), "..", "data", "oasis_longitudinal.csv")
-
 
 def test_train_predict_roundtrip():
-    df = load_raw(DATA_PATH)
+    df = load_combined()
+    assert df["Subject ID"].str.startswith("OAS1").any() and df["Subject ID"].str.startswith("OAS2").any()
     X, y = clean(df)
-    pipeline, metrics = train_model(X, y)
+    pipeline, metrics = train_model(X, y, groups=df["Subject ID"])
 
     assert 0.0 <= metrics["accuracy"] <= 1.0
     assert 0.0 <= metrics["auroc"] <= 1.0

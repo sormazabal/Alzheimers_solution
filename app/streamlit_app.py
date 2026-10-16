@@ -190,7 +190,7 @@ with st.sidebar:
     if os.path.exists(db.OASIS2_CSV):
         conn = _db_connect()
         options = [p["patient_id"] for p in db.list_patients(conn)]
-        picked = st.selectbox("Patient (linked EHR + MRI + EEG)", options, key="picked_patient_id")
+        picked = st.selectbox("Patient (EHR + MRI + EEG)", options, key="picked_patient_id")
         if st.button(":material/play_arrow: Run all modalities", width="stretch"):
             with st.spinner(f"Running clinical + MRI + EEG for {picked}..."):
                 _load_patient_into_session(picked)
@@ -220,7 +220,7 @@ with st.sidebar:
 
     st.caption("Latest assessments")
     if st.session_state.clinical_result:
-        label, level = risk_tier_for_score(st.session_state.clinical_result["score"])
+        label, level = band_for_score(st.session_state.clinical_result["score"])
         st.markdown(f"Clinical risk: {chip(label, level)}", unsafe_allow_html=True)
     else:
         st.caption("Clinical risk: not yet assessed")
@@ -291,7 +291,7 @@ def page_overview():
             st.caption("Clinical risk")
             result = st.session_state.clinical_result
             if result:
-                label, level = risk_tier_for_score(result["score"])
+                label, level = band_for_score(result["score"])
                 st.markdown(chip(label, level), unsafe_allow_html=True)
                 st.caption(f"Score: {result['score']:.0%}")
             else:
@@ -378,7 +378,7 @@ def page_overview():
 # Page: Clinical risk
 # ---------------------------------------------------------------------------
 def page_clinical():
-    rec = {k: v for k, v in (st.session_state.clinical_record or {}).items() if v is not None and v == v}  # drop None/NaN
+    rec = st.session_state.clinical_record or {}
     with st.form("patient_form"):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -409,11 +409,6 @@ def page_clinical():
                          "It reflects skull/head size, not disease severity.",
                 )
                 mr_delay = st.number_input("MRI delay (days)", min_value=0, max_value=2000, value=int(rec.get("MR Delay", 0)), help=FEATURE_META["MR Delay"]["definition"])
-                no_mri = st.checkbox(
-                    "Volumetrics not available",
-                    value="nWBV" not in rec and st.session_state.clinical_record is not None,
-                    help="Ignores the three fields above; the model fills them with the training-population average.",
-                )
 
         submitted = st.form_submit_button("Assess risk")
 
@@ -423,8 +418,6 @@ def page_clinical():
             "nWBV": nwbv, "ASF": asf, "Visit": visit, "MR Delay": mr_delay,
             "M/F": sex,
         }
-        if no_mri:
-            record.update({"nWBV": None, "ASF": None, "MR Delay": None})
         result = predict(record)
         st.session_state.clinical_record = record
         st.session_state.clinical_result = result
@@ -432,11 +425,11 @@ def page_clinical():
     record = st.session_state.clinical_record
     result = st.session_state.clinical_result
     if result:
-        severity_label, severity_level = risk_tier_for_score(result["score"])
+        severity_label, severity_level = band_for_score(result["score"])
 
         with st.container(border=True):
             top = st.columns([2, 2, 1])
-            top[0].metric("Risk score", f"{result['score']:.0%}")
+            top[0].metric("Risk score", f"{result['score']:.0%}", result["label"])
             with top[1]:
                 st.write("")
                 st.markdown(chip(severity_label, severity_level), unsafe_allow_html=True)

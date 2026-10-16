@@ -39,7 +39,10 @@ A: CDR (Clinical Dementia Rating) is itself the diagnosis. Using it would leak t
 A: Each standardized input is multiplied by its model coefficient. The three largest contributions are shown, each marked "raises risk" or "lowers risk", with the patient's percentile against the training population. This is exact for a linear model. No SHAP is needed.
 
 **Q: How was it trained and tested?**
-A: 5-fold cross-validation on 82 rows. Reported metrics come from out-of-fold predictions. The final model is then refit on all rows. The dataset is a synthetic OASIS-shaped sample, so the numbers are indicative only.
+A: 5-fold cross-validation on 608 rows from the real OASIS-1 (235 subjects, one visit each, after dropping young controls with no CDR or MMSE) and OASIS-2 (373 visits). Folds are split by subject, so repeat visits of one person never appear in both train and test. Reported metrics come from out-of-fold predictions. The final model is then refit on all rows.
+
+**Q: How were OASIS-1 and OASIS-2 harmonized?**
+A: OASIS-1 has no diagnosis label, so it is derived from CDR (0 is Nondemented, above 0 is Demented). Education is a 1 to 5 category in OASIS-1 and is mapped to approximate years (8, 12, 14, 16, 18). OASIS-1 has one visit, so Visit is 1 and MR Delay is 0. OASIS-2 "Converted" subjects count as at-risk.
 
 ---
 

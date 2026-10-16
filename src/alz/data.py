@@ -28,7 +28,40 @@ FEATURE_META = {
     "Sex_M": {"label": "Sex (male)", "definition": "1 if patient is male, 0 if female.", "range": "0 or 1"},
 }
 
-_DEFAULT_POPULATION_PATH = os.path.join(os.path.dirname(__file__), "..", "..", "data", "oasis_longitudinal.csv")
+
+_RAW_DIR = os.path.join(os.path.dirname(__file__), "..", "..", "data", "OASIS1_raw")
+OASIS1_XLSX = os.path.join(_RAW_DIR, "oasis_cross-sectional-5708aa0a98d82080.xlsx")
+OASIS2_XLSX = os.path.join(_RAW_DIR, "oasis_longitudinal_demographics-8d83e569fa2e2d30.xlsx")
+
+# OASIS-1 stores education as a 1-5 category; OASIS-2 stores years. Approximate years per code.
+_OASIS1_EDUC_YEARS = {1: 8, 2: 12, 3: 14, 4: 16, 5: 18}
+
+
+def load_oasis1(path: str = OASIS1_XLSX) -> pd.DataFrame:
+    """OASIS-1 (cross-sectional) harmonized to the OASIS-2 column layout.
+
+    Rows without CDR/MMSE (the young-adult controls) are dropped. OASIS-1 has no Group label,
+    so it is derived from CDR (0 -> Nondemented, >0 -> Demented). Single visit, so Visit=1 and
+    MR Delay=0.
+    """
+    df = pd.read_excel(path).dropna(subset=["CDR", "MMSE"])
+    return pd.DataFrame({
+        "Subject ID": df["ID"].str.replace(r"_MR\d+$", "", regex=True),
+        "MRI ID": df["ID"],
+        "Group": df["CDR"].map(lambda c: "Nondemented" if c == 0 else "Demented"),
+        "Visit": 1, "MR Delay": 0, "M/F": df["M/F"], "Hand": df["Hand"], "Age": df["Age"],
+        "EDUC": df["Educ"].map(_OASIS1_EDUC_YEARS), "SES": df["SES"], "MMSE": df["MMSE"],
+        "CDR": df["CDR"], "eTIV": df["eTIV"], "nWBV": df["nWBV"], "ASF": df["ASF"],
+    })
+
+
+def load_combined(oasis1: str = OASIS1_XLSX, oasis2: str = OASIS2_XLSX) -> pd.DataFrame:
+    """OASIS-1 + OASIS-2 stacked into one training frame (Subject ID keeps subjects separable)."""
+    df2 = pd.read_excel(oasis2)
+    missing = set(REQUIRED_COLUMNS) - set(df2.columns)
+    if missing:
+        raise ValueError(f"Missing expected OASIS columns: {sorted(missing)}")
+    return pd.concat([load_oasis1(oasis1), df2[REQUIRED_COLUMNS]], ignore_index=True)
 
 
 def load_raw(path: str) -> pd.DataFrame:
@@ -51,9 +84,9 @@ def clean(df: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
 
 
 @lru_cache(maxsize=None)  # ponytail: caches per path; drop if paths change at runtime
-def load_population(path: str = _DEFAULT_POPULATION_PATH) -> pd.DataFrame:
+def load_population() -> pd.DataFrame:
     """Cleaned training population (feature columns only), for population comparisons in the app."""
-    X, _ = clean(load_raw(path))
+    X, _ = clean(load_combined())
     return X
 
 
