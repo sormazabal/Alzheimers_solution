@@ -220,7 +220,7 @@ with st.sidebar:
 
     st.caption("Latest assessments")
     if st.session_state.clinical_result:
-        label, level = band_for_score(st.session_state.clinical_result["score"])
+        label, level = risk_tier_for_score(st.session_state.clinical_result["score"])
         st.markdown(f"Clinical risk: {chip(label, level)}", unsafe_allow_html=True)
     else:
         st.caption("Clinical risk: not yet assessed")
@@ -291,7 +291,7 @@ def page_overview():
             st.caption("Clinical risk")
             result = st.session_state.clinical_result
             if result:
-                label, level = band_for_score(result["score"])
+                label, level = risk_tier_for_score(result["score"])
                 st.markdown(chip(label, level), unsafe_allow_html=True)
                 st.caption(f"Score: {result['score']:.0%}")
             else:
@@ -378,7 +378,7 @@ def page_overview():
 # Page: Clinical risk
 # ---------------------------------------------------------------------------
 def page_clinical():
-    rec = st.session_state.clinical_record or {}
+    rec = {k: v for k, v in (st.session_state.clinical_record or {}).items() if v is not None and v == v}  # drop None/NaN
     with st.form("patient_form"):
         col1, col2, col3 = st.columns(3)
         with col1:
@@ -409,6 +409,11 @@ def page_clinical():
                          "It reflects skull/head size, not disease severity.",
                 )
                 mr_delay = st.number_input("MRI delay (days)", min_value=0, max_value=2000, value=int(rec.get("MR Delay", 0)), help=FEATURE_META["MR Delay"]["definition"])
+                no_mri = st.checkbox(
+                    "Volumetrics not available",
+                    value="nWBV" not in rec and st.session_state.clinical_record is not None,
+                    help="Ignores the three fields above; the model fills them with the training-population average.",
+                )
 
         submitted = st.form_submit_button("Assess risk")
 
@@ -418,6 +423,8 @@ def page_clinical():
             "nWBV": nwbv, "ASF": asf, "Visit": visit, "MR Delay": mr_delay,
             "M/F": sex,
         }
+        if no_mri:
+            record.update({"nWBV": None, "ASF": None, "MR Delay": None})
         result = predict(record)
         st.session_state.clinical_record = record
         st.session_state.clinical_result = result
@@ -425,11 +432,11 @@ def page_clinical():
     record = st.session_state.clinical_record
     result = st.session_state.clinical_result
     if result:
-        severity_label, severity_level = band_for_score(result["score"])
+        severity_label, severity_level = risk_tier_for_score(result["score"])
 
         with st.container(border=True):
             top = st.columns([2, 2, 1])
-            top[0].metric("Risk score", f"{result['score']:.0%}", result["label"])
+            top[0].metric("Risk score", f"{result['score']:.0%}")
             with top[1]:
                 st.write("")
                 st.markdown(chip(severity_label, severity_level), unsafe_allow_html=True)
@@ -515,7 +522,7 @@ def _mri_2d_examples() -> list[dict]:
     for cls in ["Non Demented", "Mild Dementia", "Moderate Dementia"]:
         paths = sorted(glob.glob(os.path.join(IMAGESOASIS_DIR, cls, "*.jpg")))[:3]
         for path in paths:
-            examples.append({"name": f"{cls} — {os.path.basename(path)}", "path": path})
+            examples.append({"name": os.path.basename(path), "path": path})
     return examples
 
 
@@ -696,6 +703,17 @@ def _run_mri_3d(volume_path: str, volume_name: str):
             st.caption("LLM explanation unavailable (check LLM provider configuration).")
 
 
+def _with_linked(items: list[dict], modality: str) -> tuple[list[dict], str]:
+    """Puts the selected patient's own recording first so dropdowns default to it.
+    Returns (items, key suffix); the suffix resets the selectbox when the patient changes."""
+    pid = st.session_state.patient["id"]
+    if os.path.exists(db.DB_PATH):
+        path = db.get_recordings(_db_connect(), pid).get(modality)
+        if path:
+            items = [{"name": pid, "path": path}] + [i for i in items if i["name"] != pid]
+    return items, pid
+
+
 def _show_mri_cached(result: dict):
     """Renders a result loaded by 'Run all modalities' (no image/heatmap on hand)."""
     st.metric("Dementia confirmation", result["label"], f"{result['score']:.0%} confidence")
@@ -780,9 +798,9 @@ def page_mri():
         with sub2d:
             with st.container(border=True):
                 uploaded = st.file_uploader("Upload a 2D slice", type=["jpg", "jpeg", "png"], key="mri_2d_uploader")
-                examples = _mri_2d_examples()
+                examples, _pid = _with_linked(_mri_2d_examples(), "mri_2d")
                 example_names = [e["name"] for e in examples]
-                chosen_example = st.selectbox("Or select an example slice", example_names, key="mri_2d_example") if example_names else None
+                chosen_example = st.selectbox("Or select an example slice", example_names, key=f"mri_2d_example_{_pid}") if example_names else None
                 if not example_names:
                     st.caption("No example slices available (imagesoasis dataset not downloaded).")
                 run_2d = st.button("Run evaluation", key="mri_2d_run_btn")
@@ -826,9 +844,9 @@ def page_mri():
                     accept_multiple_files=True,
                     key="mri_3d_uploader",
                 )
-                subjects = _oasis1_subjects()
+                subjects, _pid = _with_linked(_oasis1_subjects(), "mri_3d")
                 subject_names = [s["name"] for s in subjects]
-                chosen_subject = st.selectbox("Or select an OASIS1_raw subject", subject_names, key="mri_3d_subject") if subject_names else None
+                chosen_subject = st.selectbox("Or select an OASIS1_raw subject", subject_names, key=f"mri_3d_subject_{_pid}") if subject_names else None
                 if not subject_names:
                     st.caption("No OASIS1_raw subjects found on disk.")
                 run_3d = st.button("Run evaluation", key="mri_3d_run_btn")
@@ -907,7 +925,7 @@ def _eeg_examples() -> list[dict]:
             set_path = os.path.join(EEG_EXAMPLES_DIR, sub_id, "eeg", f"{sub_id}_task-eyesclosed_eeg.set")
             if os.path.exists(set_path) and os.path.getsize(set_path) > 1000:
                 examples.append({
-                    "name": f"{sub_id} — {group_label} (MMSE {row['MMSE']})",
+                    "name": sub_id,
                     "path": set_path,
                 })
     return examples
@@ -916,9 +934,9 @@ def _eeg_examples() -> list[dict]:
 def page_eeg():
     with st.container(border=True):
         uploaded_eeg = st.file_uploader("Upload EEG recording", type=["set"])
-        examples = _eeg_examples()
+        examples, _pid = _with_linked(_eeg_examples(), "eeg")
         example_names = [e["name"] for e in examples]
-        chosen_example = st.selectbox("Or select a prior recording", example_names) if example_names else None
+        chosen_example = st.selectbox("Or select a prior recording", example_names, key=f"eeg_example_{_pid}") if example_names else None
         if not example_names:
             st.caption("No example recordings available (dataset not downloaded).")
         run = st.button("Run evaluation")
