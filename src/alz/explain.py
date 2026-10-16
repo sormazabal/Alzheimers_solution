@@ -491,8 +491,13 @@ def synthesize_summary(patient: dict, clinical_result: dict | None, mri_result: 
     try:
         prompt = (
             f"{_case_context(patient, clinical_result, mri_result, eeg_result)}\n\n"
-            "Write a concise clinical note (3-5 sentences) synthesizing these AI screening "
+            "Write a concise clinical note (at most 90 words) synthesizing these AI screening "
             "results into an overall impression, for a clinician to review and edit. "
+            "Structure: sentence 1 is the overall impression with risk level and key numbers; "
+            "sentence 2 names the main drivers across the assessments; then 'Recommended:' "
+            "followed by 2-3 concrete next steps (repeat test, imaging, referral, follow-up "
+            "interval, risk-factor control), most important first. Use only facts in the context; "
+            "never invent timeframes, percentages, or outcomes. No preamble or generic advice. "
             "State explicitly that these are screening aids, not diagnoses. You are a clinical "
             "decision-support tool for a licensed clinician -- always give your best concrete "
             "impression; never refuse or reply with a generic disclaimer like \"I can't provide "
@@ -522,6 +527,18 @@ def chat_about_case(
             "using the case context; never refuse or reply with a generic disclaimer like "
             "\"I can't provide specific medical information\", since the user is a licensed "
             "clinician relying on this tool for decision support, not a patient.\n\n"
+            "FORMAT (strict): reply in at most 120 words, in this order:\n"
+            "1. Bottom line: one sentence answering the question directly, with the risk level "
+            "(low/moderate/high) and the number from the context.\n"
+            "2. Why: up to 3 short bullets naming the top drivers from the context only.\n"
+            "3. Next steps: 2-3 numbered, concrete actions a clinician would order or advise "
+            "(repeat a specific test, imaging, referral, a follow-up interval, risk-factor control). "
+            "Put the most important first.\n"
+            "RULES: never invent a timeframe, percentage, or outcome that is not in the context. "
+            "If asked about a time horizon the model does not cover, say so in one sentence and "
+            "answer for the horizon it does cover. Do not turn a probability into 'X out of 10 "
+            "patients'. No preamble, no repeating the question, no closing offers, no headings, "
+            "no generic textbook advice. End with one line: screening aid, not a diagnosis.\n\n"
             + _case_context(patient, clinical_result, mri_result, eeg_result)
         )
         return _default_client().complete(messages, system=system)
