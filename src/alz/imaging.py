@@ -24,6 +24,8 @@ def _device(device: str | None = None):
         return device
     if torch.cuda.is_available():
         return "cuda"
+    if torch.backends.mps.is_available():
+        return "mps"
     try:
         import torch_directml
 
